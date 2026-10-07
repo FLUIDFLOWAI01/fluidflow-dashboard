@@ -30,9 +30,16 @@ export default function ExecutiveDashboard() {
 
   // Form states for Admin Onboarding
   const [newStationName, setNewStationName] = useState('');
+  const [stationNumber, setStationNumber] = useState('');
   const [managerPhone, setManagerPhone] = useState('');
   const [pumpCount, setPumpCount] = useState(2);
   const [deadstockLimit, setDeadstockLimit] = useState('');
+
+  // Dynamic Dispenser State
+  const [dispensers, setDispensers] = useState<any[]>([
+    { id: 1, type: 'Twin', n1Fuel: 'Super', n1Label: 'Super 1', n2Fuel: 'Diesel', n2Label: 'Diesel 1' },
+    { id: 2, type: 'Twin', n1Fuel: 'Super', n1Label: 'Super 2', n2Fuel: 'Diesel', n2Label: 'Diesel 2' }
+  ]);
 
   // Form states for Price Management
   const [targetFuel, setTargetFuel] = useState('Diesel');
@@ -56,9 +63,35 @@ export default function ExecutiveDashboard() {
   }, [filteredStations]);
 
   const unbankedCash = totals.expected - totals.banked;
-  
-  // Now gets an ARRAY of waybills for the selected station
   const stationWaybills = selectedStation !== 'all' ? (mockWaybills[selectedStation] || []) : [];
+
+  // --- DISPENSER LOGIC ---
+  const handlePumpCountChange = (val: string) => {
+    const count = parseInt(val) || 1;
+    setPumpCount(count);
+    
+    setDispensers(prev => {
+      const newDispensers = [...prev];
+      if (count > prev.length) {
+        for (let i = prev.length; i < count; i++) {
+          newDispensers.push({ 
+            id: i + 1, type: 'Twin', 
+            n1Fuel: 'Super', n1Label: `Super ${i+1}`, 
+            n2Fuel: 'Diesel', n2Label: `Diesel ${i+1}` 
+          });
+        }
+      } else if (count < prev.length) {
+        newDispensers.length = count;
+      }
+      return newDispensers;
+    });
+  };
+
+  const updateDispenser = (index: number, field: string, value: string) => {
+    const newDisps = [...dispensers];
+    newDisps[index][field] = value;
+    setDispensers(newDisps);
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col">
@@ -190,7 +223,6 @@ export default function ExecutiveDashboard() {
                         key={station.id} 
                         onClick={() => setSelectedStation(station.id)}
                         className="hover:bg-slate-800/60 transition-colors cursor-pointer group"
-                        title="Click to inspect this branch's active waybills"
                       >
                         <td className="py-4 font-medium text-white group-hover:text-emerald-400 transition-colors">{station.name}</td>
                         <td className="py-4 text-slate-300">{station.pumps}</td>
@@ -238,7 +270,6 @@ export default function ExecutiveDashboard() {
                   </button>
                 </div>
 
-                {/* Map through every individual waybill and display a separate tracker card for it */}
                 {stationWaybills.map((waybill, idx) => (
                   <div key={idx} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
                     <div className="bg-slate-800/60 px-6 py-5 border-b border-slate-700/50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -335,7 +366,6 @@ export default function ExecutiveDashboard() {
             <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
               <TrendingUp className="w-5 h-5 text-emerald-400" /> Multi-Station Fuel Price Update Matrix
             </h3>
-            {/* UPDATED SUBTITLE TEXT HERE */}
             <p className="text-slate-400 text-sm mb-6">
               Update pump prices globally or target specific stations. Manager shift calculations are strictly locked to these rates to prevent margin manipulation.
             </p>
@@ -440,51 +470,53 @@ export default function ExecutiveDashboard() {
           </div>
         )}
 
-        {/* TAB 3: ADMIN ONBOARDING PORTAL */}
+        {/* TAB 3: ADMIN ONBOARDING PORTAL (WITH DISPENSER CONFIGURATION) */}
         {activeTab === 'onboarding' && (
-          <div className="max-w-3xl mx-auto bg-slate-900 rounded-2xl border border-slate-800 p-8 shadow-xl">
+          <div className="max-w-4xl mx-auto bg-slate-900 rounded-2xl border border-slate-800 p-8 shadow-xl">
             <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
               <Sliders className="w-5 h-5 text-emerald-400" /> Automated Station Provisioning Portal
             </h3>
             <p className="text-slate-400 text-sm mb-6">
-              Instantly provision a new filling station, generate its database UUID, configure pumps, calibrate deadstock thresholds, and link manager WhatsApp numbers.
+              Instantly provision a new filling station, map dispenser topologies, calibrate deadstock thresholds, and link manager WhatsApp numbers.
             </p>
 
-            <div className="space-y-5">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">Station Name & Location</label>
-                <input 
-                  type="text" 
-                  placeholder="e.g., Kumasi Central Express"
-                  value={newStationName}
-                  onChange={(e) => setNewStationName(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-emerald-400"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">Manager WhatsApp Phone Number</label>
-                <input 
-                  type="text" 
-                  placeholder="e.g., +233241234567"
-                  value={managerPhone}
-                  onChange={(e) => setManagerPhone(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-emerald-400"
-                />
-              </div>
-
+            <div className="space-y-6">
+              {/* STATION IDENTITY & LOCATION */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">Total Dispensers / Pumps</label>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">Station Name & Location</label>
                   <input 
-                    type="number" 
-                    value={pumpCount}
-                    onChange={(e) => setPumpCount(Number(e.target.value))}
+                    type="text" 
+                    placeholder="e.g., Kumasi Central Express"
+                    value={newStationName}
+                    onChange={(e) => setNewStationName(e.target.value)}
                     className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-emerald-400"
                   />
                 </div>
-                
-                {/* FIELD: BASE DEADSTOCK CALIBRATION */}
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">Station Number / ID</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g., ST-4099"
+                    value={stationNumber}
+                    onChange={(e) => setStationNumber(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
+              </div>
+
+              {/* MANAGER WHATSAPP & DEADSTOCK */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">Manager WhatsApp Phone Number</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g., +233241234567"
+                    value={managerPhone}
+                    onChange={(e) => setManagerPhone(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">Base Deadstock (Liters)</label>
                   <div className="relative">
@@ -497,15 +529,105 @@ export default function ExecutiveDashboard() {
                     />
                     <span className="absolute right-4 top-3.5 text-slate-400 font-medium text-sm">L</span>
                   </div>
-                  <p className="text-xs text-slate-500 mt-1.5 leading-tight">Un-pumpable volume threshold. AI will use this baseline to detect pre-drop shortages.</p>
+                </div>
+              </div>
+
+              {/* DYNAMIC DISPENSER TOPOLOGY CONFIGURATOR */}
+              <div className="mt-8 pt-6 border-t border-slate-800">
+                <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-4">
+                  <div>
+                    <h4 className="text-sm font-bold text-white uppercase tracking-wider">Dispenser & Nozzle Topology</h4>
+                    <p className="text-xs text-slate-400 mt-1">Configure physical hardware layout for accurate AI tank depletion tracking.</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-slate-300">Total Usable Dispensers:</label>
+                    <input 
+                      type="number" 
+                      min="1"
+                      value={pumpCount}
+                      onChange={(e) => handlePumpCountChange(e.target.value)}
+                      className="w-20 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-400"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  {dispensers.map((disp, index) => (
+                    <div key={disp.id} className="bg-slate-800/40 p-5 rounded-xl border border-slate-700 shadow-inner">
+                      <div className="flex justify-between items-center mb-4 border-b border-slate-700/50 pb-3">
+                        <span className="text-emerald-400 font-bold text-sm flex items-center gap-2">
+                          <Database className="w-4 h-4" /> Physical Dispenser {index + 1}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400 uppercase font-semibold">Hardware Type:</span>
+                          <select 
+                            value={disp.type} 
+                            onChange={(e) => updateDispenser(index, 'type', e.target.value)} 
+                            className="bg-slate-900 border border-slate-600 rounded-md text-xs text-white px-3 py-1.5 focus:outline-none focus:border-emerald-400"
+                          >
+                            <option value="Single">Single Pump (1 Nozzle)</option>
+                            <option value="Twin">Twin Pump (2 Nozzles)</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* Nozzle 1 Config */}
+                        <div className="space-y-2">
+                          <label className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Nozzle 1 Configuration</label>
+                          <div className="flex gap-2">
+                            <select 
+                              value={disp.n1Fuel} 
+                              onChange={(e) => updateDispenser(index, 'n1Fuel', e.target.value)} 
+                              className="bg-slate-800 border border-slate-600 rounded-lg text-sm text-white px-3 py-2 focus:outline-none w-1/3"
+                            >
+                              <option value="Super">Super</option>
+                              <option value="Diesel">Diesel</option>
+                            </select>
+                            <input 
+                              type="text"
+                              value={disp.n1Label} 
+                              onChange={(e) => updateDispenser(index, 'n1Label', e.target.value)} 
+                              className="bg-slate-800 border border-slate-600 rounded-lg text-sm text-white px-3 py-2 focus:outline-none w-2/3" 
+                              placeholder="System Label (e.g., Super 1)" 
+                            />
+                          </div>
+                        </div>
+
+                        {/* Nozzle 2 Config (Only shows if 'Twin' is selected) */}
+                        {disp.type === 'Twin' && (
+                          <div className="space-y-2 animate-in fade-in">
+                            <label className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Nozzle 2 Configuration</label>
+                            <div className="flex gap-2">
+                              <select 
+                                value={disp.n2Fuel} 
+                                onChange={(e) => updateDispenser(index, 'n2Fuel', e.target.value)} 
+                                className="bg-slate-800 border border-slate-600 rounded-lg text-sm text-white px-3 py-2 focus:outline-none w-1/3"
+                              >
+                                <option value="Super">Super</option>
+                                <option value="Diesel">Diesel</option>
+                              </select>
+                              <input 
+                                type="text"
+                                value={disp.n2Label} 
+                                onChange={(e) => updateDispenser(index, 'n2Label', e.target.value)} 
+                                className="bg-slate-800 border border-slate-600 rounded-lg text-sm text-white px-3 py-2 focus:outline-none w-2/3" 
+                                placeholder="System Label (e.g., Diesel 1)" 
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
 
               <button 
-                onClick={() => alert(`Station "${newStationName || 'New Station'}" successfully provisioned with ${pumpCount} pumps and a locked deadstock limit of ${deadstockLimit || '0'}L!`)}
-                className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-emerald-500/20 mt-4"
+                onClick={() => alert(`Station "${newStationName || 'New Station'}" (ID: ${stationNumber}) successfully provisioned in Supabase with ${pumpCount} configured dispensers!`)}
+                className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-emerald-500/20 mt-6"
               >
-                Provision Station Database ⚡
+                Provision Station Database & Hardware Map ⚡
               </button>
             </div>
           </div>
