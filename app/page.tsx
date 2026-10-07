@@ -129,7 +129,7 @@ export default function ExecutiveDashboard() {
               <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg transition-all">
                 <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Unbanked Balance</p>
                 <p className="text-3xl font-extrabold text-amber-400 mt-2">GHS {unbankedCash.toLocaleString()}</p>
-                <div className="mt-2 text-xs text-slate-400">Pending Monday bulk deposit</div>
+                <div className="mt-2 text-xs text-slate-400">Total physical cash pending bank deposit</div>
               </div>
 
               <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg transition-all">
