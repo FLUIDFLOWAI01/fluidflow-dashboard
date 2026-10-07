@@ -32,6 +32,7 @@ export default function ExecutiveDashboard() {
   const [newStationName, setNewStationName] = useState('');
   const [managerPhone, setManagerPhone] = useState('');
   const [pumpCount, setPumpCount] = useState(2);
+  const [deadstockLimit, setDeadstockLimit] = useState('');
 
   // Form states for Price Management
   const [targetFuel, setTargetFuel] = useState('Diesel');
@@ -218,7 +219,7 @@ export default function ExecutiveDashboard() {
               </div>
             </div>
 
-            {/* --- NEW SECTION: WAYBILL TRACKERS LOOP --- */}
+            {/* --- WAYBILL TRACKERS LOOP --- */}
             {selectedStation !== 'all' && stationWaybills.length > 0 && (
               <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-2 gap-4 border-b border-slate-800 pb-4">
@@ -229,7 +230,6 @@ export default function ExecutiveDashboard() {
                     <p className="text-slate-400 text-sm mt-1">Tracks overlapping FIFO deliveries, deadstock triggers, and remote WhatsApp scans.</p>
                   </div>
                   
-                  {/* MOBILE WHATSAPP INTEGRATION BUTTON */}
                   <button 
                     onClick={() => alert("Scan request ping sent! The Manager will receive a WhatsApp prompt on their mobile phone to snap the new waybill. Once uploaded, OpenAI will read the data and auto-populate a new tracker card here.")}
                     className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-all shadow-lg shadow-emerald-500/20 flex items-center gap-2"
@@ -241,7 +241,6 @@ export default function ExecutiveDashboard() {
                 {/* Map through every individual waybill and display a separate tracker card for it */}
                 {stationWaybills.map((waybill, idx) => (
                   <div key={idx} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-                    {/* Waybill OCR Data Header */}
                     <div className="bg-slate-800/60 px-6 py-5 border-b border-slate-700/50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                       <div>
                         <span className={`px-2.5 py-1 rounded-md text-xs font-bold tracking-wider mr-3 ${waybill.status.includes('Active') ? 'bg-blue-500/20 text-blue-400' : 'bg-slate-500/20 text-slate-400'}`}>
@@ -271,14 +270,12 @@ export default function ExecutiveDashboard() {
                     </div>
                     
                     <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
-                      {/* FIFO Tracker with DEADSTOCK detection */}
                       <div>
                         <h4 className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-4">Inventory Depletion (FIFO)</h4>
                         
                         <div className="flex justify-between text-sm mb-1 items-center">
                           <span className="text-slate-300">Total Received: <span className="text-white font-bold">{waybill.volume.toLocaleString()} L</span></span>
                           
-                          {/* DEADSTOCK ALERT FLAG */}
                           {waybill.remaining === 0 ? (
                             <span className="text-rose-400 font-bold bg-rose-500/10 px-2 py-0.5 rounded flex items-center gap-1">
                               <AlertTriangle className="w-3 h-3"/> Deadstock Reached
@@ -300,7 +297,6 @@ export default function ExecutiveDashboard() {
                         </div>
                       </div>
 
-                      {/* Financial Audit */}
                       <div>
                         <h4 className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-4">Financial Realization Audit</h4>
                         
@@ -339,8 +335,9 @@ export default function ExecutiveDashboard() {
             <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
               <TrendingUp className="w-5 h-5 text-emerald-400" /> Multi-Station Fuel Price Update Matrix
             </h3>
+            {/* UPDATED SUBTITLE TEXT HERE */}
             <p className="text-slate-400 text-sm mb-6">
-              Update pump prices globally or target specific stations. New shift openings will automatically calculate expected revenue using these active rates.
+              Update pump prices globally or target specific stations. Manager shift calculations are strictly locked to these rates to prevent margin manipulation.
             </p>
 
             <div className="space-y-5">
@@ -402,7 +399,6 @@ export default function ExecutiveDashboard() {
                   </label>
                 </div>
 
-                {/* --- DYNAMIC STATION SELECTION CHECKLIST --- */}
                 {targetScope === 'specific' && (
                   <div className="mt-4 p-4 bg-slate-800/40 rounded-xl border border-slate-700 space-y-3 animate-in fade-in slide-in-from-top-2">
                     <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Select Target Branches</p>
@@ -451,7 +447,7 @@ export default function ExecutiveDashboard() {
               <Sliders className="w-5 h-5 text-emerald-400" /> Automated Station Provisioning Portal
             </h3>
             <p className="text-slate-400 text-sm mb-6">
-              Instantly provision a new filling station, generate its database UUID, configure pumps, and link manager WhatsApp numbers without writing raw SQL.
+              Instantly provision a new filling station, generate its database UUID, configure pumps, calibrate deadstock thresholds, and link manager WhatsApp numbers.
             </p>
 
             <div className="space-y-5">
@@ -477,18 +473,36 @@ export default function ExecutiveDashboard() {
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">Total Dispensers / Pumps</label>
-                <input 
-                  type="number" 
-                  value={pumpCount}
-                  onChange={(e) => setPumpCount(Number(e.target.value))}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-emerald-400"
-                />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">Total Dispensers / Pumps</label>
+                  <input 
+                    type="number" 
+                    value={pumpCount}
+                    onChange={(e) => setPumpCount(Number(e.target.value))}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
+                
+                {/* FIELD: BASE DEADSTOCK CALIBRATION */}
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">Base Deadstock (Liters)</label>
+                  <div className="relative">
+                    <input 
+                      type="number" 
+                      placeholder="e.g., 1500"
+                      value={deadstockLimit}
+                      onChange={(e) => setDeadstockLimit(e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 pr-12 text-white text-sm focus:outline-none focus:border-emerald-400"
+                    />
+                    <span className="absolute right-4 top-3.5 text-slate-400 font-medium text-sm">L</span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1.5 leading-tight">Un-pumpable volume threshold. AI will use this baseline to detect pre-drop shortages.</p>
+                </div>
               </div>
 
               <button 
-                onClick={() => alert(`Station "${newStationName || 'New Station'}" successfully provisioned in Supabase with ${pumpCount} pumps!`)}
+                onClick={() => alert(`Station "${newStationName || 'New Station'}" successfully provisioned with ${pumpCount} pumps and a locked deadstock limit of ${deadstockLimit || '0'}L!`)}
                 className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-emerald-500/20 mt-4"
               >
                 Provision Station Database ⚡
