@@ -1,7 +1,14 @@
 'use client';
 
-import React, { useState } from 'react';
-import { LayoutDashboard, Building2, Sliders, AlertTriangle, CheckCircle, TrendingUp, Truck, Database, Fuel } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { LayoutDashboard, Building2, Sliders, AlertTriangle, CheckCircle, TrendingUp, Truck, Database, Fuel, ArrowLeft } from 'lucide-react';
+
+// --- MOCK DATABASE (For interactive filtering) ---
+const mockStations = [
+  { id: 'station-1', name: 'Airport Road Station', pumps: '4 Pumps (2 Twin)', status: 'OPEN (Shift #12)', expected: 125000, banked: 125000, variance: 0, volume: 8200 },
+  { id: 'station-2', name: 'East Legon Branch', pumps: '6 Pumps (3 Twin)', status: 'PENDING BANKING', expected: 161750, banked: 140000, variance: -21750, volume: 10500 },
+  { id: 'station-3', name: 'Tema Harbour Terminal', pumps: '8 Pumps (4 Twin)', status: 'CLOSED', expected: 80000, banked: 80000, variance: 0, volume: 5750 },
+];
 
 export default function ExecutiveDashboard() {
   const [selectedStation, setSelectedStation] = useState('all');
@@ -15,6 +22,23 @@ export default function ExecutiveDashboard() {
   // Form states for Price Management
   const [targetFuel, setTargetFuel] = useState('Diesel');
   const [newPrice, setNewPrice] = useState('');
+
+  // --- DYNAMIC DATA FILTERING ---
+  const filteredStations = selectedStation === 'all' 
+    ? mockStations 
+    : mockStations.filter(s => s.id === selectedStation);
+
+  const totals = useMemo(() => {
+    return filteredStations.reduce((acc, station) => {
+      acc.volume += station.volume;
+      acc.expected += station.expected;
+      acc.banked += station.banked;
+      if (station.variance < 0) acc.shortages += 1;
+      return acc;
+    }, { volume: 0, expected: 0, banked: 0, shortages: 0 });
+  }, [filteredStations]);
+
+  const unbankedCash = totals.expected - totals.banked;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col">
@@ -41,9 +65,9 @@ export default function ExecutiveDashboard() {
               className="bg-transparent text-white text-sm font-medium focus:outline-none cursor-pointer"
             >
               <option value="all" className="bg-slate-900">🏢 All Stations (Consolidated)</option>
-              <option value="station-1" className="bg-slate-900">📍 Airport Road Station</option>
-              <option value="station-2" className="bg-slate-900">📍 East Legon Branch</option>
-              <option value="station-3" className="bg-slate-900">📍 Tema Harbour Terminal</option>
+              {mockStations.map(s => (
+                <option key={s.id} value={s.id} className="bg-slate-900">📍 {s.name}</option>
+              ))}
             </select>
           </div>
 
@@ -88,36 +112,51 @@ export default function ExecutiveDashboard() {
         {/* TAB 1: OVERVIEW & VARIANCES */}
         {activeTab === 'overview' && (
           <div className="space-y-6">
+            {/* Dynamic KPI Summary Cards */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-              <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg">
-                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Total Volume Sold Today</p>
-                <p className="text-3xl font-extrabold text-white mt-2">24,450 <span className="text-base font-normal text-slate-400">L</span></p>
+              <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg transition-all">
+                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Volume Sold {selectedStation !== 'all' ? '(Branch)' : '(Total)'}</p>
+                <p className="text-3xl font-extrabold text-white mt-2">{totals.volume.toLocaleString()} <span className="text-base font-normal text-slate-400">L</span></p>
                 <div className="mt-2 text-xs text-emerald-400 flex items-center gap-1 font-medium">↑ 12% vs yesterday</div>
               </div>
 
-              <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg">
+              <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg transition-all">
                 <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Expected Revenue</p>
-                <p className="text-3xl font-extrabold text-emerald-400 mt-2">GHS 366,750</p>
+                <p className="text-3xl font-extrabold text-emerald-400 mt-2">GHS {totals.expected.toLocaleString()}</p>
                 <div className="mt-2 text-xs text-slate-400">Calculated via pump meter deltas</div>
               </div>
 
-              <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg">
-                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Unbanked Cash Balance</p>
-                <p className="text-3xl font-extrabold text-amber-400 mt-2">GHS 42,100</p>
+              <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg transition-all">
+                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Unbanked Balance</p>
+                <p className="text-3xl font-extrabold text-amber-400 mt-2">GHS {unbankedCash.toLocaleString()}</p>
                 <div className="mt-2 text-xs text-slate-400">Pending Monday bulk deposit</div>
               </div>
 
-              <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg">
-                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Wetstock / Shortage Flags</p>
-                <p className="text-3xl font-extrabold text-rose-500 mt-2">1 Station</p>
-                <div className="mt-2 text-xs text-rose-400 font-medium">⚠️ Action Required</div>
+              <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-lg transition-all">
+                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Active Shortages</p>
+                <p className={`text-3xl font-extrabold mt-2 ${totals.shortages > 0 ? 'text-rose-500' : 'text-emerald-400'}`}>
+                  {totals.shortages} {totals.shortages === 1 ? 'Station' : 'Stations'}
+                </p>
+                <div className="mt-2 text-xs text-rose-400 font-medium">{totals.shortages > 0 ? '⚠️ Action Required' : 'All Clear'}</div>
               </div>
             </div>
 
-            <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6 shadow-lg">
-              <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                <Building2 className="w-5 h-5 text-emerald-400" /> Live Station Health & Reconciliation Grid
-              </h3>
+            {/* Station Status Health Grid */}
+            <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6 shadow-lg relative">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Building2 className="w-5 h-5 text-emerald-400" /> 
+                  {selectedStation === 'all' ? 'Live Station Health & Reconciliation Grid' : 'Branch Deep Dive'}
+                </h3>
+                {selectedStation !== 'all' && (
+                  <button 
+                    onClick={() => setSelectedStation('all')}
+                    className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg transition-colors"
+                  >
+                    <ArrowLeft className="w-3 h-3" /> Back to All Stations
+                  </button>
+                )}
+              </div>
               
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
@@ -132,22 +171,35 @@ export default function ExecutiveDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 text-sm">
-                    <tr className="hover:bg-slate-800/40 transition-colors">
-                      <td className="py-4 font-medium text-white">Airport Road Station</td>
-                      <td className="py-4 text-slate-300">4 Pumps (2 Twin)</td>
-                      <td className="py-4"><span className="bg-emerald-500/10 text-emerald-400 px-2.5 py-1 rounded-md text-xs font-semibold">OPEN (Shift #12)</span></td>
-                      <td className="py-4 font-semibold">GHS 125,000</td>
-                      <td className="py-4 text-slate-300">GHS 125,000</td>
-                      <td className="py-4"><span className="flex items-center gap-1.5 text-emerald-400 font-medium text-xs"><CheckCircle className="w-4 h-4" /> Balanced (0.00)</span></td>
-                    </tr>
-                    <tr className="hover:bg-slate-800/40 transition-colors">
-                      <td className="py-4 font-medium text-white">East Legon Branch</td>
-                      <td className="py-4 text-slate-300">6 Pumps (3 Twin)</td>
-                      <td className="py-4"><span className="bg-amber-500/10 text-amber-400 px-2.5 py-1 rounded-md text-xs font-semibold">PENDING BANKING</span></td>
-                      <td className="py-4 font-semibold">GHS 161,750</td>
-                      <td className="py-4 text-slate-300">GHS 140,000</td>
-                      <td className="py-4"><span className="flex items-center gap-1.5 text-rose-400 font-medium text-xs"><AlertTriangle className="w-4 h-4" /> Shortage: -GHS 21,750</span></td>
-                    </tr>
+                    {filteredStations.map((station) => (
+                      <tr 
+                        key={station.id} 
+                        onClick={() => setSelectedStation(station.id)}
+                        className="hover:bg-slate-800/60 transition-colors cursor-pointer group"
+                        title="Click to inspect this branch"
+                      >
+                        <td className="py-4 font-medium text-white group-hover:text-emerald-400 transition-colors">{station.name}</td>
+                        <td className="py-4 text-slate-300">{station.pumps}</td>
+                        <td className="py-4">
+                          <span className={`px-2.5 py-1 rounded-md text-xs font-semibold ${station.status.includes('OPEN') ? 'bg-emerald-500/10 text-emerald-400' : station.status.includes('PENDING') ? 'bg-amber-500/10 text-amber-400' : 'bg-slate-500/10 text-slate-400'}`}>
+                            {station.status}
+                          </span>
+                        </td>
+                        <td className="py-4 font-semibold">GHS {station.expected.toLocaleString()}</td>
+                        <td className="py-4 text-slate-300">GHS {station.banked.toLocaleString()}</td>
+                        <td className="py-4">
+                          {station.variance < 0 ? (
+                            <span className="flex items-center gap-1.5 text-rose-400 font-medium text-xs">
+                              <AlertTriangle className="w-4 h-4" /> Shortage: {station.variance.toLocaleString()}
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1.5 text-emerald-400 font-medium text-xs">
+                              <CheckCircle className="w-4 h-4" /> Balanced (0.00)
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
