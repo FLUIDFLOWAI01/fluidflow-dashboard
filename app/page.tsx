@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
-import { LayoutDashboard, Building2, Sliders, AlertTriangle, CheckCircle, TrendingUp, Database, Fuel, ArrowLeft, Camera } from 'lucide-react';
+import { LayoutDashboard, Building2, Sliders, AlertTriangle, CheckCircle, TrendingUp, Database, Fuel, ArrowLeft, Smartphone } from 'lucide-react';
 
 // --- MOCK DATABASE (For interactive filtering) ---
 const mockStations = [
@@ -10,11 +10,18 @@ const mockStations = [
   { id: 'station-3', name: 'Tema Harbour Terminal', pumps: '8 Pumps (4 Twin)', status: 'CLOSED', expected: 80000, banked: 80000, variance: 0, volume: 5750 },
 ];
 
-// --- MOCK WAYBILLS (Linked to stations) ---
-const mockWaybills: Record<string, any> = {
-  'station-1': { id: 'AGO-54012', fuel: 'Diesel', volume: 54000, remaining: 18500, date: 'Oct 6, 2026', driver: 'Kwame Mensah', truckReg: 'GT-405-21', expectedRev: 531200, bankedRev: 480000, momoRev: 35000 },
-  'station-2': { id: 'PMS-99011', fuel: 'Super (PMS)', volume: 36000, remaining: 12000, date: 'Oct 5, 2026', driver: 'Yaw Boakye', truckReg: 'GR-1122-19', expectedRev: 345000, bankedRev: 310000, momoRev: 15000 },
-  'station-3': { id: 'AGO-88220', fuel: 'Diesel', volume: 45000, remaining: 45000, date: 'Oct 6, 2026', driver: 'Ali Hassan', truckReg: 'GN-889-22', expectedRev: 0, bankedRev: 0, momoRev: 0 },
+// --- MULTIPLE MOCK WAYBILLS PER STATION (To track every load separately) ---
+const mockWaybills: Record<string, any[]> = {
+  'station-1': [
+    { id: 'AGO-54012', fuel: 'Diesel', volume: 54000, remaining: 18500, date: 'Oct 6, 2026', driver: 'Kwame Mensah', truckReg: 'GT-405-21', expectedRev: 531200, bankedRev: 480000, momoRev: 35000, status: 'Active' },
+    { id: 'PMS-11223', fuel: 'Super (PMS)', volume: 36000, remaining: 0, date: 'Oct 1, 2026', driver: 'Kofi Annan', truckReg: 'GR-2022-20', expectedRev: 547200, bankedRev: 547200, momoRev: 0, status: 'Completed (Fully Realized)' }
+  ],
+  'station-2': [
+    { id: 'PMS-99011', fuel: 'Super (PMS)', volume: 36000, remaining: 12000, date: 'Oct 5, 2026', driver: 'Yaw Boakye', truckReg: 'GR-1122-19', expectedRev: 345000, bankedRev: 310000, momoRev: 15000, status: 'Active' }
+  ],
+  'station-3': [
+    { id: 'AGO-88220', fuel: 'Diesel', volume: 45000, remaining: 45000, date: 'Oct 6, 2026', driver: 'Ali Hassan', truckReg: 'GN-889-22', expectedRev: 0, bankedRev: 0, momoRev: 0, status: 'Active' }
+  ],
 };
 
 export default function ExecutiveDashboard() {
@@ -46,7 +53,9 @@ export default function ExecutiveDashboard() {
   }, [filteredStations]);
 
   const unbankedCash = totals.expected - totals.banked;
-  const activeWaybill = selectedStation !== 'all' ? mockWaybills[selectedStation] : null;
+  
+  // Now gets an ARRAY of waybills for the selected station
+  const stationWaybills = selectedStation !== 'all' ? (mockWaybills[selectedStation] || []) : [];
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col">
@@ -207,102 +216,116 @@ export default function ExecutiveDashboard() {
               </div>
             </div>
 
-            {/* --- NEW SECTION: WAYBILL TRACKER (Only shows when a specific station is selected) --- */}
-            {selectedStation !== 'all' && activeWaybill && (
-              <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-4 gap-4">
+            {/* --- NEW SECTION: WAYBILL TRACKERS LOOP --- */}
+            {selectedStation !== 'all' && stationWaybills.length > 0 && (
+              <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-2 gap-4 border-b border-slate-800 pb-4">
                   <div>
                     <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                      <Database className="w-5 h-5 text-blue-400" /> Active Load & Financial Realization
+                      <Database className="w-5 h-5 text-blue-400" /> Perpetual Load Lifecycle Tracker
                     </h3>
-                    <p className="text-slate-400 text-sm mt-1">Track expected cash vs banked cash for continuous overlapping deliveries (FIFO).</p>
+                    <p className="text-slate-400 text-sm mt-1">Tracks overlapping FIFO deliveries, deadstock triggers, and remote WhatsApp scans.</p>
                   </div>
                   
+                  {/* MOBILE WHATSAPP INTEGRATION BUTTON */}
                   <button 
-                    onClick={() => alert('This will open the device camera or file picker to upload a Waybill for OpenAI Vision to scan!')}
-                    className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-all shadow-lg shadow-blue-500/20 flex items-center gap-2"
+                    onClick={() => alert("Scan request ping sent! The Manager will receive a WhatsApp prompt on their mobile phone to snap the new waybill. Once uploaded, OpenAI will read the data and auto-populate a new tracker card here.")}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-all shadow-lg shadow-emerald-500/20 flex items-center gap-2"
                   >
-                    <Camera className="w-4 h-4" /> Scan Waybill (AI OCR)
+                    <Smartphone className="w-4 h-4" /> Request Mobile Scan (WhatsApp)
                   </button>
                 </div>
 
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-                  {/* Waybill OCR Data Header */}
-                  <div className="bg-slate-800/60 px-6 py-5 border-b border-slate-700/50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                    <div>
-                      <span className="bg-blue-500/20 text-blue-400 px-2.5 py-1 rounded-md text-xs font-bold tracking-wider mr-3">ACTIVE BATCH</span>
-                      <span className="text-white font-semibold text-lg">Waybill #{activeWaybill.id}</span>
+                {/* Map through every individual waybill and display a separate tracker card for it */}
+                {stationWaybills.map((waybill, idx) => (
+                  <div key={idx} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                    {/* Waybill OCR Data Header */}
+                    <div className="bg-slate-800/60 px-6 py-5 border-b border-slate-700/50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                      <div>
+                        <span className={`px-2.5 py-1 rounded-md text-xs font-bold tracking-wider mr-3 ${waybill.status.includes('Active') ? 'bg-blue-500/20 text-blue-400' : 'bg-slate-500/20 text-slate-400'}`}>
+                          {waybill.status.toUpperCase()}
+                        </span>
+                        <span className="text-white font-semibold text-lg">Waybill #{waybill.id}</span>
+                      </div>
+                      
+                      <div className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
+                        <div>
+                          <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Date</p>
+                          <p className="text-white font-medium">{waybill.date}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Driver Name</p>
+                          <p className="text-white font-medium">{waybill.driver}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Car No.</p>
+                          <p className="text-white font-medium">{waybill.truckReg}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Fuel / Amount</p>
+                          <p className="text-emerald-400 font-bold">{waybill.volume.toLocaleString()} L <span className="text-slate-300 font-normal">({waybill.fuel})</span></p>
+                        </div>
+                      </div>
                     </div>
                     
-                    <div className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
+                    <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
+                      {/* FIFO Tracker with DEADSTOCK detection */}
                       <div>
-                        <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Date</p>
-                        <p className="text-white font-medium">{activeWaybill.date}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Driver Name</p>
-                        <p className="text-white font-medium">{activeWaybill.driver}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Car No.</p>
-                        <p className="text-white font-medium">{activeWaybill.truckReg}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Fuel / Amount</p>
-                        <p className="text-emerald-400 font-bold">{activeWaybill.volume.toLocaleString()} L <span className="text-slate-300 font-normal">({activeWaybill.fuel})</span></p>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
-                    {/* FIFO Tracker */}
-                    <div>
-                      <h4 className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-4">Inventory Depletion (FIFO)</h4>
-                      
-                      <div className="flex justify-between text-sm mb-1">
-                        <span className="text-slate-300">Total Received: <span className="text-white font-bold">{activeWaybill.volume.toLocaleString()} L</span></span>
-                        <span className="text-blue-400 font-bold">{activeWaybill.remaining.toLocaleString()} L Remaining</span>
-                      </div>
-                      
-                      <div className="w-full bg-slate-800 rounded-full h-3 mb-4 overflow-hidden">
-                        <div className="bg-blue-500 h-3 rounded-full transition-all duration-1000" style={{ width: `${((activeWaybill.volume - activeWaybill.remaining) / activeWaybill.volume) * 100}%` }}></div>
-                      </div>
-
-                      <div className="space-y-3 mt-6">
-                        <div className="flex justify-between items-center text-sm p-3 bg-slate-800/40 rounded-lg border border-slate-700/50">
-                          <span className="text-slate-300">Volume Sold (Depleted)</span>
-                          <span className="text-white font-semibold">{(activeWaybill.volume - activeWaybill.remaining).toLocaleString()} L</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Financial Audit */}
-                    <div>
-                      <h4 className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-4">Financial Realization Audit</h4>
-                      
-                      <div className="bg-slate-800/30 p-5 rounded-xl border border-slate-700">
-                        <div className="flex justify-between mb-4 border-b border-slate-700 pb-4">
-                          <span className="text-slate-400">Dynamic Expected Revenue</span>
-                          <span className="text-white font-bold text-lg">GHS {activeWaybill.expectedRev.toLocaleString()}</span>
+                        <h4 className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-4">Inventory Depletion (FIFO)</h4>
+                        
+                        <div className="flex justify-between text-sm mb-1 items-center">
+                          <span className="text-slate-300">Total Received: <span className="text-white font-bold">{waybill.volume.toLocaleString()} L</span></span>
+                          
+                          {/* DEADSTOCK ALERT FLAG */}
+                          {waybill.remaining === 0 ? (
+                            <span className="text-rose-400 font-bold bg-rose-500/10 px-2 py-0.5 rounded flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3"/> Deadstock Reached
+                            </span>
+                          ) : (
+                            <span className="text-blue-400 font-bold">{waybill.remaining.toLocaleString()} L Remaining</span>
+                          )}
                         </div>
                         
-                        <div className="flex justify-between mb-2">
-                          <span className="text-emerald-400">Verified Bank Deposits</span>
-                          <span className="text-emerald-400 font-bold">GHS {activeWaybill.bankedRev.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between mb-4">
-                          <span className="text-emerald-400">MoMo Settlements</span>
-                          <span className="text-emerald-400 font-bold">GHS {activeWaybill.momoRev.toLocaleString()}</span>
+                        <div className="w-full bg-slate-800 rounded-full h-3 mb-4 overflow-hidden">
+                          <div className={`h-3 rounded-full transition-all duration-1000 ${waybill.remaining === 0 ? 'bg-rose-500' : 'bg-blue-500'}`} style={{ width: `${((waybill.volume - waybill.remaining) / waybill.volume) * 100}%` }}></div>
                         </div>
 
-                        <div className="flex justify-between pt-4 border-t border-slate-700 items-center">
-                          <span className="text-slate-300 font-medium">Unrealized / Outstanding</span>
-                          <span className="text-amber-400 font-extrabold text-xl">GHS {(activeWaybill.expectedRev - activeWaybill.bankedRev - activeWaybill.momoRev).toLocaleString()}</span>
+                        <div className="space-y-3 mt-6">
+                          <div className="flex justify-between items-center text-sm p-3 bg-slate-800/40 rounded-lg border border-slate-700/50">
+                            <span className="text-slate-300">Volume Sold (Depleted)</span>
+                            <span className="text-white font-semibold">{(waybill.volume - waybill.remaining).toLocaleString()} L</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Financial Audit */}
+                      <div>
+                        <h4 className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-4">Financial Realization Audit</h4>
+                        
+                        <div className="bg-slate-800/30 p-5 rounded-xl border border-slate-700">
+                          <div className="flex justify-between mb-4 border-b border-slate-700 pb-4">
+                            <span className="text-slate-400">Dynamic Expected Revenue</span>
+                            <span className="text-white font-bold text-lg">GHS {waybill.expectedRev.toLocaleString()}</span>
+                          </div>
+                          
+                          <div className="flex justify-between mb-2">
+                            <span className="text-emerald-400">Verified Bank Deposits</span>
+                            <span className="text-emerald-400 font-bold">GHS {waybill.bankedRev.toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between mb-4">
+                            <span className="text-emerald-400">MoMo Settlements</span>
+                            <span className="text-emerald-400 font-bold">GHS {waybill.momoRev.toLocaleString()}</span>
+                          </div>
+
+                          <div className="flex justify-between pt-4 border-t border-slate-700 items-center">
+                            <span className="text-slate-300 font-medium">Unrealized / Outstanding</span>
+                            <span className="text-amber-400 font-extrabold text-xl">GHS {(waybill.expectedRev - waybill.bankedRev - waybill.momoRev).toLocaleString()}</span>
+                          </div>
                         </div>
                       </div>
                     </div>
                   </div>
-                </div>
+                ))}
               </div>
             )}
           </div>
