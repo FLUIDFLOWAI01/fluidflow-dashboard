@@ -36,6 +36,8 @@ export default function ExecutiveDashboard() {
   // Form states for Price Management
   const [targetFuel, setTargetFuel] = useState('Diesel');
   const [newPrice, setNewPrice] = useState('');
+  const [targetScope, setTargetScope] = useState<'global' | 'specific'>('global');
+  const [selectedTargetStations, setSelectedTargetStations] = useState<string[]>([]);
 
   // --- DYNAMIC DATA FILTERING ---
   const filteredStations = selectedStation === 'all' 
@@ -372,25 +374,68 @@ export default function ExecutiveDashboard() {
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">Target Scope</label>
                 <div className="grid grid-cols-2 gap-4">
-                  <label className="flex items-center gap-3 bg-slate-800/60 p-4 rounded-xl border border-slate-700 cursor-pointer hover:border-slate-600">
-                    <input type="radio" name="scope" defaultChecked className="accent-emerald-400" />
+                  <label className={`flex items-center gap-3 bg-slate-800/60 p-4 rounded-xl border cursor-pointer transition-colors ${targetScope === 'global' ? 'border-emerald-400' : 'border-slate-700 hover:border-slate-600'}`}>
+                    <input 
+                      type="radio" 
+                      name="scope" 
+                      checked={targetScope === 'global'}
+                      onChange={() => setTargetScope('global')}
+                      className="accent-emerald-400 w-4 h-4" 
+                    />
                     <div>
                       <p className="text-sm font-semibold text-white">All Stations (Global)</p>
                       <p className="text-xs text-slate-400">Apply instantly across entire network</p>
                     </div>
                   </label>
-                  <label className="flex items-center gap-3 bg-slate-800/60 p-4 rounded-xl border border-slate-700 cursor-pointer hover:border-slate-600">
-                    <input type="radio" name="scope" className="accent-emerald-400" />
+                  <label className={`flex items-center gap-3 bg-slate-800/60 p-4 rounded-xl border cursor-pointer transition-colors ${targetScope === 'specific' ? 'border-emerald-400' : 'border-slate-700 hover:border-slate-600'}`}>
+                    <input 
+                      type="radio" 
+                      name="scope" 
+                      checked={targetScope === 'specific'}
+                      onChange={() => setTargetScope('specific')}
+                      className="accent-emerald-400 w-4 h-4" 
+                    />
                     <div>
                       <p className="text-sm font-semibold text-white">Selected Stations Only</p>
                       <p className="text-xs text-slate-400">Pick specific branches</p>
                     </div>
                   </label>
                 </div>
+
+                {/* --- DYNAMIC STATION SELECTION CHECKLIST --- */}
+                {targetScope === 'specific' && (
+                  <div className="mt-4 p-4 bg-slate-800/40 rounded-xl border border-slate-700 space-y-3 animate-in fade-in slide-in-from-top-2">
+                    <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Select Target Branches</p>
+                    {mockStations.map((station) => (
+                      <label key={station.id} className="flex items-center gap-3 cursor-pointer group">
+                        <input 
+                          type="checkbox" 
+                          checked={selectedTargetStations.includes(station.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedTargetStations([...selectedTargetStations, station.id]);
+                            } else {
+                              setSelectedTargetStations(selectedTargetStations.filter(id => id !== station.id));
+                            }
+                          }}
+                          className="w-4 h-4 rounded border-slate-600 bg-slate-900 accent-emerald-400 cursor-pointer"
+                        />
+                        <span className="text-sm text-slate-300 group-hover:text-white transition-colors">{station.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <button 
-                onClick={() => alert(`Price update deployed successfully for ${targetFuel} at GHS ${newPrice || '0.00'}!`)}
+                onClick={() => {
+                  if (targetScope === 'specific' && selectedTargetStations.length === 0) {
+                    alert("Please select at least one station before deploying.");
+                    return;
+                  }
+                  const scopeMsg = targetScope === 'global' ? 'ALL STATIONS globally' : `${selectedTargetStations.length} selected station(s)`;
+                  alert(`Price update deployed successfully for ${targetFuel} at GHS ${newPrice || '0.00'} to ${scopeMsg}! 🚀`);
+                }}
                 className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-emerald-500/20 mt-4"
               >
                 Deploy Price Update to Stations 🚀
