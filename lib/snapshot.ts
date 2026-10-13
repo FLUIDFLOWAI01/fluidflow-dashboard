@@ -164,7 +164,7 @@ export async function buildSnapshot(): Promise<Snapshot> {
     if (!current || String(shift.created_at ?? '') > String(current.created_at ?? '')) openShiftByStation.set(key, shift);
   }
 
-  for (const shift of allShifts.values()) {
+  for (const shift of  Array.from( Array.from( Array.from(allShifts.values())))) {
     // A shift counts on the day it was closed (or the day it opened while it is still running).
     const stamp = Date.parse(String(shift.closed_at ?? shift.created_at ?? ''));
     if (!Number.isFinite(stamp) || stamp < yesterdayStart) continue;
