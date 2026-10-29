@@ -4,6 +4,8 @@ import { callBackend } from '../../../lib/backend';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
+const MAX_DISPLAYS = 12;
+
 // Creates a station, its pumps and links the manager's WhatsApp number (all done by the backend).
 export async function POST(req: Request) {
   let body: any;
@@ -30,19 +32,29 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Add between 1 and 60 dispensers' }, { status: 400 });
   }
 
+  const cleaned: Array<{ id: number; displays: Array<{ fuel: string; label: string | null }>; backMeter: boolean }> = [];
+  for (const d of dispensers) {
+    const id = Number(d?.id);
+    const displays: any[] = Array.isArray(d?.displays) ? d.displays : [];
+    if (!Number.isInteger(id) || id < 1) {
+      return NextResponse.json({ error: 'Each dispenser needs a number' }, { status: 400 });
+    }
+    if (displays.length < 1 || displays.length > MAX_DISPLAYS) {
+      return NextResponse.json({ error: `Dispenser ${id}: use between 1 and ${MAX_DISPLAYS} nozzle pairs (displays)` }, { status: 400 });
+    }
+    const items = displays.map((x) => ({ fuel: text(x?.fuel), label: text(x?.label) || null }));
+    if (items.some((x) => !x.fuel || x.fuel.length > 40)) {
+      return NextResponse.json({ error: `Dispenser ${id}: choose or type a fuel for every nozzle pair` }, { status: 400 });
+    }
+    cleaned.push({ id, displays: items, backMeter: d?.backMeter !== false });
+  }
+
   const result = await callBackend('/api/stations/provision', {
     station_name: text(body.station_name),
     station_number: text(body.station_number),
     manager_phone: text(body.manager_phone),
     base_deadstock: deadstock,
-    dispensers: dispensers.map((d) => ({
-      id: Number(d?.id),
-      type: text(d?.type),
-      n1Fuel: text(d?.n1Fuel),
-      n1Label: text(d?.n1Label),
-      n2Fuel: text(d?.n2Fuel) || null,
-      n2Label: text(d?.n2Label) || null,
-    })),
+    dispensers: cleaned,
   });
   return NextResponse.json(result.data, { status: result.status });
 }
