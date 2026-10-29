@@ -6,7 +6,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabase } from './supabase';
-import { gradeLabel, isTwin, normGrade, nozzleFuel, toNumber } from './fuel';
+import { gradeLabel, normGrade, nozzleFuel, pumpDisplayCount, pumpGrades, toNumber } from './fuel';
 import type { Row } from './fuel';
 import type {
   BankingState,
@@ -164,7 +164,7 @@ export async function buildSnapshot(): Promise<Snapshot> {
     if (!current || String(shift.created_at ?? '') > String(current.created_at ?? '')) openShiftByStation.set(key, shift);
   }
 
-  for (const shift of  Array.from( Array.from( Array.from(allShifts.values())))) {
+  for (const shift of Array.from(allShifts.values())) {
     // A shift counts on the day it was closed (or the day it opened while it is still running).
     const stamp = Date.parse(String(shift.closed_at ?? shift.created_at ?? ''));
     if (!Number.isFinite(stamp) || stamp < yesterdayStart) continue;
@@ -247,6 +247,8 @@ export async function buildSnapshot(): Promise<Snapshot> {
 
   const waybills: Record<string, WaybillView[]> = {};
   const inventory: Record<string, InventoryView[]> = {};
+  const pumpFuelsByStation: Record<string, string[]> = {}; // fuels the station's pumps actually sell
+  const stationFuels: Record<string, string[]> = {}; // pumps + prices + deliveries (for the price table)
 
   for (const station of stationsRaw) {
     const stationId = String(station.id);
@@ -298,12 +300,17 @@ export async function buildSnapshot(): Promise<Snapshot> {
     // ----- inventory (book stock per fuel from active loads) -----
     const grades = new Set<string>();
     for (const v of views) if (v.grade) grades.add(v.grade);
+    const sold: string[] = [];
     for (const pump of pumpsByStation.get(stationId) ?? []) {
-      grades.add(normGrade(nozzleFuel(pump, 'left')));
-      if (isTwin(pump.dispenser_type)) grades.add(normGrade(nozzleFuel(pump, 'right')));
+      for (const grade of pumpGrades(pump)) if (!sold.includes(grade)) sold.push(grade);
     }
+    for (const grade of sold) grades.add(grade);
     grades.delete('');
     grades.delete('unknown');
+    pumpFuelsByStation[stationId] = sold;
+    stationFuels[stationId] = Array.from(new Set([...Array.from(grades), ...Object.keys(prices[stationId] ?? {})]))
+      .filter((g) => g && g !== 'unknown')
+      .sort();
 
     inventory[stationId] = Array.from(grades)
       .sort()
@@ -339,7 +346,7 @@ export async function buildSnapshot(): Promise<Snapshot> {
     .map((s): StationView => {
       const id = String(s.id);
       const pumps = pumpsByStation.get(id) ?? [];
-      const twins = pumps.filter((p) => isTwin(p.dispenser_type)).length;
+      const multi = pumps.filter((p) => pumpDisplayCount(p) > 1).length;
       const agg = sales.get(id) ?? { volToday: 0, volYesterday: 0, expToday: 0 };
       const unbanked = round2(toNumber(s.unbanked_cash_balance) ?? 0);
       const openShift = openShiftByStation.get(id);
@@ -353,17 +360,16 @@ export async function buildSnapshot(): Promise<Snapshot> {
         if (inv.level === 'empty') attention.push(`${inv.label}: no stock left on recorded deliveries`);
         else if (inv.level === 'critical') attention.push(`${inv.label} at or below deadstock`);
       }
-      const missingPrices = Array.from(
-        new Set(pumps.flatMap((p) => [normGrade(nozzleFuel(p, 'left')), ...(isTwin(p.dispenser_type) ? [normGrade(nozzleFuel(p, 'right'))] : [])])),
-      ).filter((g) => g && g !== 'unknown' && priceFor(id, g) === null);
-      for (const g of missingPrices) attention.push(`No selling price set for ${gradeLabel(g)}`);
+      for (const g of pumpFuelsByStation[id] ?? []) {
+        if (priceFor(id, g) === null) attention.push(`No selling price set for ${gradeLabel(g)}`);
+      }
 
       return {
         id,
         number: String(s.station_number ?? ''),
         name: String(s.name ?? 'Unnamed station'),
         managerPhone: String(s.manager_phone ?? ''),
-        pumpSummary: `${pumps.length} Pump${pumps.length === 1 ? '' : 's'}${twins > 0 ? ` (${twins} Twin)` : ''}`,
+        pumpSummary: `${pumps.length} Pump${pumps.length === 1 ? '' : 's'}${multi > 0 ? ` (${multi} multi-display)` : ''}`,
         pumpCount: pumps.length,
         status: openShift ? `OPEN (Shift #${shortId(openShift.id)})` : unbanked > 0.5 ? 'PENDING BANKING' : 'CLOSED',
         shiftOpen: Boolean(openShift),
@@ -379,6 +385,7 @@ export async function buildSnapshot(): Promise<Snapshot> {
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 
+  const allGrades = Array.from(new Set(Object.values(stationFuels).flat())).sort();
   return {
     generatedAt: nowDate.toISOString(),
     stations,
@@ -386,6 +393,8 @@ export async function buildSnapshot(): Promise<Snapshot> {
     inventory,
     dips,
     prices,
+    fuels: allGrades.map((grade) => ({ grade, label: gradeLabel(grade) })),
+    stationFuels,
     reorders,
     momoConnected: false,
     warnings,
