@@ -6,8 +6,9 @@ import {
   ArrowLeft, Smartphone, Bell, Droplets, RefreshCw, LogOut, Check, X,
 } from 'lucide-react';
 import type {
-  DispenserForm, InventoryView, ReorderView, Snapshot, StationView, StockLevel, WaybillView,
+  DispenserForm, DisplayForm, InventoryView, ReorderView, Snapshot, StationView, StockLevel, WaybillView,
 } from '../lib/types';
+import { displayLabels, gradeLabel, normGrade } from '../lib/fuel';
 
 // ---------- formatting helpers ----------
 const money = (n: number) => n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -361,10 +362,19 @@ function WaybillCard({ waybill, momoConnected }: { waybill: WaybillView; momoCon
 
 // ---------- onboarding helpers ----------
 const makeDispenser = (n: number): DispenserForm => ({
-  id: n, type: 'Twin', n1Fuel: 'Super', n1Label: `Super ${n}`, n2Fuel: 'Diesel', n2Label: `Diesel ${n}`,
+  id: n,
+  backMeter: true,
+  displays: [
+    { fuel: 'Super', label: `Super ${n}` },
+    { fuel: 'Diesel', label: `Diesel ${n}` },
+  ],
 });
 
 const MAX_DISPENSERS = 40;
+const MAX_PAIRS = 12;
+// Suggestions only: any other fuel name can be typed in.
+const DEFAULT_FUELS = ['Diesel', 'Super', 'RON 95', 'Kerosene'];
+const OTHER_FUEL = '__other__';
 
 // ======================================================================
 export default function ExecutiveDashboard() {
@@ -390,6 +400,7 @@ export default function ExecutiveDashboard() {
 
   // Price management form
   const [targetFuel, setTargetFuel] = useState('Diesel');
+  const [customFuelName, setCustomFuelName] = useState('');
   const [newPrice, setNewPrice] = useState('');
   const [targetScope, setTargetScope] = useState<'global' | 'specific'>('global');
   const [selectedTargetStations, setSelectedTargetStations] = useState<string[]>([]);
@@ -430,13 +441,37 @@ export default function ExecutiveDashboard() {
 
   const volumeDelta = totals.volumeYesterday > 0 ? ((totals.volume - totals.volumeYesterday) / totals.volumeYesterday) * 100 : null;
 
-  // price matrix columns
+  // price matrix columns: every fuel known anywhere (pumps, prices, deliveries); Diesel and Super when nothing is known yet
   const priceGrades = useMemo(() => {
-    const grades = new Set<string>(['diesel', 'super']);
-    if (snapshot) for (const p of Object.values(snapshot.prices)) for (const g of Object.keys(p)) grades.add(g);
-    return Array.from(grades);
+    const grades = new Set<string>();
+    if (snapshot) {
+      for (const f of snapshot.fuels ?? []) grades.add(f.grade);
+      for (const p of Object.values(snapshot.prices)) for (const g of Object.keys(p)) grades.add(g);
+    }
+    if (grades.size === 0) {
+      grades.add('diesel');
+      grades.add('super');
+    }
+    return Array.from(grades).sort();
   }, [snapshot]);
-  const gradeTitle = (g: string) => (g === 'diesel' ? 'Diesel' : g === 'super' ? 'Super' : g.charAt(0).toUpperCase() + g.slice(1));
+  const gradeTitle = gradeLabel;
+
+  // fuels offered in the price form: the ones already known plus the common defaults
+  const fuelChoices = useMemo(() => {
+    const byGrade = new Map<string, string>();
+    for (const g of priceGrades) byGrade.set(g, gradeLabel(g));
+    for (const name of ['Diesel', 'Super']) if (!byGrade.has(normGrade(name))) byGrade.set(normGrade(name), name);
+    if (targetFuel !== OTHER_FUEL && targetFuel && !byGrade.has(normGrade(targetFuel))) byGrade.set(normGrade(targetFuel), targetFuel);
+    return Array.from(byGrade.values());
+  }, [priceGrades, targetFuel]);
+  const chosenFuelName = targetFuel === OTHER_FUEL ? customFuelName.trim() : targetFuel;
+
+  // suggestions for the onboarding fuel boxes
+  const fuelSuggestions = useMemo(() => {
+    const byGrade = new Map<string, string>();
+    for (const name of [...fuelChoices, ...DEFAULT_FUELS]) if (!byGrade.has(normGrade(name))) byGrade.set(normGrade(name), name);
+    return Array.from(byGrade.values());
+  }, [fuelChoices]);
 
   // ---------- actions ----------
   const resolveReorder = async (id: string | number, status: 'Verified' | 'Dismissed') => {
@@ -492,6 +527,26 @@ export default function ExecutiveDashboard() {
     setDispensers((prev) => prev.map((d, i) => (i === index ? { ...d, ...patch } : d)));
   };
 
+  // A "pair" is two nozzles (front + back) that share one meter display and sell one fuel.
+  const setPairCount = (index: number, count: number) => {
+    const n = Math.max(1, Math.min(MAX_PAIRS, Math.floor(count) || 1));
+    setDispensers((prev) =>
+      prev.map((d, i) => {
+        if (i !== index) return d;
+        if (n <= d.displays.length) return { ...d, displays: d.displays.slice(0, n) };
+        const lastFuel = d.displays[d.displays.length - 1]?.fuel ?? 'Diesel';
+        const extra: DisplayForm[] = Array.from({ length: n - d.displays.length }, () => ({ fuel: lastFuel, label: '' }));
+        return { ...d, displays: [...d.displays, ...extra] };
+      }),
+    );
+  };
+
+  const updateDisplay = (index: number, pair: number, patch: Partial<DisplayForm>) => {
+    setDispensers((prev) =>
+      prev.map((d, i) => (i === index ? { ...d, displays: d.displays.map((x, p) => (p === pair ? { ...x, ...patch } : x)) } : d)),
+    );
+  };
+
   const submitStation = async () => {
     setOnboardMsg(null);
     const deadstock = Number(deadstockLimit);
@@ -499,6 +554,8 @@ export default function ExecutiveDashboard() {
     if (!managerPhone.trim()) return setOnboardMsg({ kind: 'err', text: "Enter the manager's WhatsApp number." });
     if (deadstockLimit.trim() === '' || !Number.isFinite(deadstock) || deadstock < 0) return setOnboardMsg({ kind: 'err', text: 'Enter the base deadstock in litres (0 or more).' });
     if (dispensers.length === 0) return setOnboardMsg({ kind: 'err', text: 'Add at least one dispenser.' });
+    const incomplete = dispensers.find((d) => d.displays.some((x) => !x.fuel.trim()));
+    if (incomplete) return setOnboardMsg({ kind: 'err', text: `Dispenser ${incomplete.id}: choose or type a fuel for every nozzle pair.` });
 
     setOnboardBusy(true);
     try {
@@ -509,11 +566,11 @@ export default function ExecutiveDashboard() {
         base_deadstock: deadstock,
         dispensers: dispensers.map((d) => ({
           id: d.id,
-          type: d.type,
-          n1Fuel: d.n1Fuel,
-          n1Label: d.n1Label.trim() || `${d.n1Fuel} ${d.id}`,
-          n2Fuel: d.type === 'Twin' ? d.n2Fuel : null,
-          n2Label: d.type === 'Twin' ? d.n2Label.trim() || `${d.n2Fuel} ${d.id}` : null,
+          backMeter: d.backMeter,
+          displays: d.displays.map((x, i) => ({
+            fuel: x.fuel.trim(),
+            label: x.label.trim() || (d.displays.length === 1 ? `${x.fuel.trim()} ${d.id}` : `${x.fuel.trim()} ${d.id}-${i + 1}`),
+          })),
         })),
       });
       if (!res.ok) throw new Error(res.data?.error || 'Provisioning failed');
@@ -544,21 +601,29 @@ export default function ExecutiveDashboard() {
     const numbers = chosen.map((s) => s.number).filter(Boolean);
     if (targetScope === 'specific' && numbers.length !== chosen.length) return setPriceMsg({ kind: 'err', text: 'A selected station has no station number, so it cannot be targeted.' });
 
+    const fuelName = chosenFuelName;
+    if (!fuelName) return setPriceMsg({ kind: 'err', text: 'Type the name of the fuel (e.g. RON 95).' });
+    if (fuelName.length > 40) return setPriceMsg({ kind: 'err', text: 'The fuel name is too long (40 characters at most).' });
+
     const scopeText = targetScope === 'global' ? 'ALL stations' : `${chosen.length} selected station(s)`;
-    if (!window.confirm(`Set ${targetFuel} to GHS ${price.toFixed(2)} per litre for ${scopeText}? Attendants' shift sales will use this price immediately.`)) return;
+    if (!window.confirm(`Set ${fuelName} to GHS ${price.toFixed(2)} per litre for ${scopeText}? Attendants' shift sales will use this price immediately.`)) return;
 
     setPriceBusy(true);
     try {
       const res = await postJson('/api/prices', 'POST', {
-        fuel_grade: targetFuel,
+        fuel_grade: fuelName,
         new_price: price,
         target_scope: targetScope,
         target_stations: targetScope === 'specific' ? numbers : [],
       });
       if (!res.ok) throw new Error(res.data?.error || 'Price update failed');
       const warning = res.data?.warning ? ` Note: ${res.data.warning}` : '';
-      setPriceMsg({ kind: 'ok', text: `${targetFuel} set to GHS ${price.toFixed(2)} at ${res.data?.updated_count ?? 0} station(s).${warning}` });
+      setPriceMsg({ kind: 'ok', text: `${fuelName} set to GHS ${price.toFixed(2)} at ${res.data?.updated_count ?? 0} station(s).${warning}` });
       setNewPrice('');
+      if (targetFuel === OTHER_FUEL) {
+        setTargetFuel(fuelName);
+        setCustomFuelName('');
+      }
       await reload();
     } catch (e) {
       setPriceMsg({ kind: 'err', text: errText(e) });
@@ -811,9 +876,25 @@ export default function ExecutiveDashboard() {
                     onChange={(e) => setTargetFuel(e.target.value)}
                     className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-emerald-400"
                   >
-                    <option value="Diesel">Diesel (AGO)</option>
-                    <option value="Super">Super PMS (Gasoline)</option>
+                    {fuelChoices.map((name) => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                    <option value={OTHER_FUEL}>➕ Another fuel (type its name)…</option>
                   </select>
+                  {targetFuel === OTHER_FUEL && (
+                    <input
+                      type="text"
+                      maxLength={40}
+                      placeholder="e.g., RON 95, Kerosene, LPG"
+                      value={customFuelName}
+                      onChange={(e) => setCustomFuelName(e.target.value)}
+                      aria-label="Name of the fuel"
+                      className="mt-3 w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-emerald-400"
+                    />
+                  )}
+                  <p className="text-xs text-slate-500 mt-2">
+                    Any fuel your stations sell can be priced. Use the same name you used when registering the station (for example RON 95).
+                  </p>
                 </div>
 
                 <div>
@@ -902,6 +983,10 @@ export default function ExecutiveDashboard() {
                           <td className="py-3 text-white font-medium">{s.name}</td>
                           {priceGrades.map((g) => {
                             const price = snapshot.prices[s.id]?.[g];
+                            const sellsIt = (snapshot.stationFuels?.[s.id] ?? []).includes(g);
+                            if (price === undefined && !sellsIt) {
+                              return <td key={g} className="py-3 text-slate-600" title="This station does not sell this fuel">—</td>;
+                            }
                             return (
                               <td key={g} className={`py-3 font-semibold ${price === undefined ? 'text-rose-400' : 'text-emerald-400'}`}>
                                 {price === undefined ? 'Not set' : money(price)}
@@ -962,7 +1047,14 @@ export default function ExecutiveDashboard() {
                 <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-4">
                   <div>
                     <h4 className="text-sm font-bold text-white uppercase tracking-wider">Dispenser & Nozzle Topology</h4>
-                    <p className="text-xs text-slate-400 mt-1">Configure physical hardware layout for accurate AI tank depletion tracking. On a twin pump, Nozzle 1 is the LEFT display and Nozzle 2 the RIGHT display.</p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Describe each dispenser by its <strong>nozzle pairs</strong>: two nozzles (front and back) that share one meter display count as one pair and sell one fuel.
+                      A single has 1 pair, a twin 2, a six-nozzle dispenser 3, and so on. Pairs are listed left to right as the attendant sees the displays.
+                      Type any fuel name (Diesel, Super, RON 95, Kerosene...).
+                    </p>
+                    <datalist id="fuel-suggestions">
+                      {fuelSuggestions.map((name) => <option key={name} value={name} />)}
+                    </datalist>
                   </div>
                   <div className="flex items-center gap-3">
                     <label htmlFor="pump-count" className="text-xs font-semibold uppercase tracking-wider text-slate-300">Total Usable Dispensers:</label>
@@ -972,56 +1064,76 @@ export default function ExecutiveDashboard() {
                 </div>
 
                 <div className="space-y-4">
-                  {dispensers.map((disp, index) => (
-                    <div key={disp.id} className="bg-slate-800/40 p-5 rounded-xl border border-slate-700 shadow-inner">
-                      <div className="flex justify-between items-center mb-4 border-b border-slate-700/50 pb-3">
-                        <span className="text-emerald-400 font-bold text-sm flex items-center gap-2">
-                          <Database className="w-4 h-4" /> Physical Dispenser {index + 1}
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-slate-400 uppercase font-semibold">Hardware Type:</span>
-                          <select
-                            value={disp.type}
-                            onChange={(e) => updateDispenser(index, { type: e.target.value === 'Single' ? 'Single' : 'Twin' })}
-                            className="bg-slate-900 border border-slate-600 rounded-md text-xs text-white px-3 py-1.5 focus:outline-none focus:border-emerald-400"
-                          >
-                            <option value="Single">Single Pump (1 Nozzle)</option>
-                            <option value="Twin">Twin Pump (2 Nozzles)</option>
-                          </select>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="space-y-2">
-                          <label className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Nozzle 1 Configuration</label>
-                          <div className="flex gap-2">
-                            <select value={disp.n1Fuel} onChange={(e) => updateDispenser(index, { n1Fuel: e.target.value })}
-                              className="bg-slate-800 border border-slate-600 rounded-lg text-sm text-white px-3 py-2 focus:outline-none w-1/3">
-                              <option value="Super">Super</option>
-                              <option value="Diesel">Diesel</option>
+                  {dispensers.map((disp, index) => {
+                    const names = displayLabels(disp.displays.length);
+                    return (
+                      <div key={disp.id} className="bg-slate-800/40 p-5 rounded-xl border border-slate-700 shadow-inner">
+                        <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-3 mb-4 border-b border-slate-700/50 pb-3">
+                          <span className="text-emerald-400 font-bold text-sm flex items-center gap-2">
+                            <Database className="w-4 h-4" /> Physical Dispenser {index + 1}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <label htmlFor={`pairs-${disp.id}`} className="text-xs text-slate-400 uppercase font-semibold">Nozzle pairs (displays):</label>
+                            <select
+                              id={`pairs-${disp.id}`}
+                              value={disp.displays.length}
+                              onChange={(e) => setPairCount(index, Number(e.target.value))}
+                              className="bg-slate-900 border border-slate-600 rounded-md text-xs text-white px-3 py-1.5 focus:outline-none focus:border-emerald-400"
+                            >
+                              {Array.from({ length: MAX_PAIRS }, (_, k) => k + 1).map((n) => (
+                                <option key={n} value={n}>
+                                  {n} {n === 1 ? 'pair' : 'pairs'} ({n * 2} nozzles)
+                                </option>
+                              ))}
                             </select>
-                            <input type="text" value={disp.n1Label} onChange={(e) => updateDispenser(index, { n1Label: e.target.value })}
-                              className="bg-slate-800 border border-slate-600 rounded-lg text-sm text-white px-3 py-2 focus:outline-none w-2/3" placeholder="System Label (e.g., Super 1)" />
                           </div>
                         </div>
 
-                        {disp.type === 'Twin' && (
-                          <div className="space-y-2">
-                            <label className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Nozzle 2 Configuration</label>
-                            <div className="flex gap-2">
-                              <select value={disp.n2Fuel} onChange={(e) => updateDispenser(index, { n2Fuel: e.target.value })}
-                                className="bg-slate-800 border border-slate-600 rounded-lg text-sm text-white px-3 py-2 focus:outline-none w-1/3">
-                                <option value="Super">Super</option>
-                                <option value="Diesel">Diesel</option>
-                              </select>
-                              <input type="text" value={disp.n2Label} onChange={(e) => updateDispenser(index, { n2Label: e.target.value })}
-                                className="bg-slate-800 border border-slate-600 rounded-lg text-sm text-white px-3 py-2 focus:outline-none w-2/3" placeholder="System Label (e.g., Diesel 1)" />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {disp.displays.map((display, pair) => (
+                            <div key={pair} className="space-y-2">
+                              <label className="text-xs text-slate-400 uppercase tracking-wider font-semibold">
+                                Pair {pair + 1}{disp.displays.length > 1 ? ` - ${names[pair]} display` : ''}
+                              </label>
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  list="fuel-suggestions"
+                                  maxLength={40}
+                                  value={display.fuel}
+                                  onChange={(e) => updateDisplay(index, pair, { fuel: e.target.value })}
+                                  aria-label={`Fuel for dispenser ${disp.id} pair ${pair + 1}`}
+                                  className="bg-slate-800 border border-slate-600 rounded-lg text-sm text-white px-3 py-2 focus:outline-none w-1/3"
+                                  placeholder="Fuel"
+                                />
+                                <input
+                                  type="text"
+                                  value={display.label}
+                                  onChange={(e) => updateDisplay(index, pair, { label: e.target.value })}
+                                  aria-label={`Label for dispenser ${disp.id} pair ${pair + 1}`}
+                                  className="bg-slate-800 border border-slate-600 rounded-lg text-sm text-white px-3 py-2 focus:outline-none w-2/3"
+                                  placeholder={`System Label (e.g., ${display.fuel.trim() || 'Diesel'} ${disp.id})`}
+                                />
+                              </div>
                             </div>
-                          </div>
-                        )}
+                          ))}
+                        </div>
+
+                        <label className="flex items-start gap-3 mt-4 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={disp.backMeter}
+                            onChange={(e) => updateDispenser(index, { backMeter: e.target.checked })}
+                            className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-900 accent-emerald-400 cursor-pointer"
+                          />
+                          <span className="text-xs text-slate-300">
+                            Front and back faces show <strong>different</strong> readings that are added together (attendants photograph both faces).
+                            <span className="block text-slate-500">Untick this if both faces show the same overall reading, so only one photo is needed.</span>
+                          </span>
+                        </label>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
