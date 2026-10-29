@@ -74,16 +74,26 @@ export interface Snapshot {
   inventory: Record<string, InventoryView[]>;
   dips: Record<string, DipView[]>;
   prices: Record<string, Record<string, number>>; // stationId -> grade -> price
+  fuels: FuelOption[]; // every fuel known anywhere (pumps, prices, deliveries)
+  stationFuels: Record<string, string[]>; // stationId -> grades that station sells / has a price or delivery for
   reorders: ReorderView[];
   momoConnected: boolean;
   warnings: string[];
 }
 
+export interface FuelOption {
+  grade: string; // normalised key, e.g. 'ron 95'
+  label: string; // display name, e.g. 'RON 95'
+}
+
+/** One meter display = one pair of nozzles that share a display and sell one fuel. */
+export interface DisplayForm {
+  fuel: string;
+  label: string;
+}
+
 export interface DispenserForm {
   id: number;
-  type: 'Single' | 'Twin';
-  n1Fuel: string;
-  n1Label: string;
-  n2Fuel: string;
-  n2Label: string;
+  displays: DisplayForm[]; // 1 display = a single, 2 = a twin, 3+ = multi-pair dispensers
+  backMeter: boolean; // true when the front and back faces show different readings that are added together
 }
