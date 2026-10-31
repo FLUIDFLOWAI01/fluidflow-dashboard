@@ -9,6 +9,7 @@ import type {
   DispenserForm, DisplayForm, InventoryView, ReorderView, Snapshot, StationView, StockLevel, WaybillView,
 } from '../lib/types';
 import { displayLabels, gradeLabel, normGrade } from '../lib/fuel';
+import AgentPanel from './AgentPanel';
 
 // ---------- formatting helpers ----------
 const money = (n: number) => n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -404,7 +405,7 @@ export default function ExecutiveDashboard() {
   }, []);
 
   const [selectedStationRaw, setSelectedStation] = useState('all');
-  const [activeTab, setActiveTab] = useState<'overview' | 'pricing' | 'onboarding'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'pricing' | 'agent' | 'onboarding'>('overview');
 
   // reorder actions
   const [busyReorder, setBusyReorder] = useState<string | number | null>(null);
@@ -717,6 +718,7 @@ export default function ExecutiveDashboard() {
         {([
           ['overview', 'Overview & Live Fleet', LayoutDashboard],
           ['pricing', 'Price Management Matrix', TrendingUp],
+          ['agent', 'AI Agent & Tanks', Droplets],
           ['onboarding', 'Admin Station Onboarding', Sliders],
         ] as const).map(([key, label, Icon]) => (
           <button
@@ -1033,6 +1035,8 @@ export default function ExecutiveDashboard() {
         )}
 
         {/* TAB 3: ADMIN ONBOARDING PORTAL */}
+        {snapshot && activeTab === 'agent' && <AgentPanel snapshot={snapshot} reload={reload} />}
+
         {snapshot && activeTab === 'onboarding' && (
           <div className="max-w-4xl mx-auto bg-slate-900 rounded-2xl border border-slate-800 p-8 shadow-xl">
             <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
