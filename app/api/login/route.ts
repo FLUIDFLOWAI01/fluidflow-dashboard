@@ -1,44 +1,45 @@
 import { NextResponse } from 'next/server';
-import { SESSION_COOKIE, SESSION_MAX_AGE_SECONDS, createSessionToken, safeEqual } from '../../../lib/auth';
+import { callBackend } from '../../../lib/backend';
+import { errorResponse, getScope } from '../../../lib/scope';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 export async function POST(req: Request) {
-  const expected = process.env.DASHBOARD_PASSWORD;
-  if (!expected || !process.env.SESSION_SECRET) {
-    return NextResponse.json({ error: 'Server is missing DASHBOARD_PASSWORD or SESSION_SECRET' }, { status: 500 });
-  }
-
-  let password = '';
+  let body: any;
   try {
-    const body = await req.json();
-    password = typeof body?.password === 'string' ? body.password : '';
+    body = await req.json();
   } catch {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
 
-  if (!(await safeEqual(password, expected))) {
-    // A short delay makes password guessing slow without needing a database.
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    return NextResponse.json({ error: 'Wrong password' }, { status: 401 });
+  const fuelGrade = typeof body?.fuel_grade === 'string' ? body.fuel_grade.trim() : '';
+  const price = Number(body?.new_price);
+  const scope = body?.target_scope === 'global' ? 'global' : body?.target_scope === 'specific' ? 'specific' : '';
+  const targets: string[] = Array.isArray(body?.target_stations)
+    ? body.target_stations.filter((s: unknown): s is string => typeof s === 'string' && s.trim() !== '')
+    : [];
+
+  if (!fuelGrade || fuelGrade.length > 40) return NextResponse.json({ error: 'Choose a fuel grade' }, { status: 400 });
+  if (!Number.isFinite(price) || price <= 0 || price > 10000) {
+    return NextResponse.json({ error: 'Enter a price greater than 0' }, { status: 400 });
+  }
+  if (!scope) return NextResponse.json({ error: 'Choose a target scope' }, { status: 400 });
+  if (scope === 'specific' && targets.length === 0) {
+    return NextResponse.json({ error: 'Select at least one station' }, { status: 400 });
   }
 
-  const token = await createSessionToken();
-  if (!token) return NextResponse.json({ error: 'Could not create a session' }, { status: 500 });
-
-  const res = NextResponse.json({ ok: true });
-  res.cookies.set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    sameSite: 'strict',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-    maxAge: SESSION_MAX_AGE_SECONDS,
-  });
-  return res;
-}
-
-export async function DELETE() {
-  const res = NextResponse.json({ ok: true });
-  res.cookies.set(SESSION_COOKIE, '', { httpOnly: true, sameSite: 'strict', path: '/', maxAge: 0 });
-  return res;
+  try {
+    const companyScope = await getScope(req, { requestedCompany: body?.company_id, write: true });
+    const result = await callBackend('/api/prices/update', {
+      company_id: companyScope.companyId,
+      fuel_grade: fuelGrade,
+      new_price: Math.round(price * 100) / 100,
+      target_scope: scope,
+      target_stations: scope === 'specific' ? targets : [],
+    });
+    return NextResponse.json(result.data, { status: result.status });
+  } catch (e) {
+    return errorResponse(e);
+  }
 }
