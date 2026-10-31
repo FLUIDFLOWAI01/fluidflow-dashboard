@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabase } from '../../../lib/supabase';
+import { errorResponse, getScope, stationInCompany, HttpError } from '../../../lib/scope';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,11 +25,20 @@ export async function PATCH(req: Request) {
   }
 
   try {
-    const { data, error } = await getSupabase().from('reorder_requests').update({ status }).eq('id', id).select('id');
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    if (!data || data.length === 0) return NextResponse.json({ error: 'Reorder alert not found' }, { status: 404 });
+    const scope = await getScope(req, { requestedCompany: body?.company_id, write: true });
+    const db = getSupabase();
+
+    // The alert must belong to one of THIS company's stations.
+    const found = await db.from('reorder_requests').select('id,station_id').eq('id', id).maybeSingle();
+    if (found.error) throw new HttpError(500, found.error.message);
+    if (!found.data || !(await stationInCompany(found.data.station_id, scope.companyId))) {
+      return NextResponse.json({ error: 'Reorder alert not found' }, { status: 404 });
+    }
+
+    const { error } = await db.from('reorder_requests').update({ status }).eq('id', id);
+    if (error) throw new HttpError(500, error.message);
     return NextResponse.json({ ok: true });
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : 'Update failed' }, { status: 500 });
+    return errorResponse(e);
   }
 }
