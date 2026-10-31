@@ -30,19 +30,32 @@ async function rows(query: PromiseLike<any>): Promise<Row[]> {
   return (data ?? []) as Row[];
 }
 
-async function fetchAll(db: SupabaseClient, table: string, columns: string): Promise<Row[]> {
-  const all: Row[] = [];
-  for (let from = 0; ; from += PAGE) {
-    const chunk = await rows(db.from(table).select(columns).order('id', { ascending: true }).range(from, from + PAGE - 1));
-    all.push(...chunk);
-    if (chunk.length < PAGE) return all;
-  }
-}
-
 async function fetchByIds(db: SupabaseClient, table: string, column: string, ids: Array<string | number>): Promise<Row[]> {
   const all: Row[] = [];
   for (let i = 0; i < ids.length; i += ID_CHUNK) {
     all.push(...(await rows(db.from(table).select('*').in(column, ids.slice(i, i + ID_CHUNK)))));
+  }
+  return all;
+}
+
+/** Reads rows of `table` that belong to the given stations, in chunks. `shape` can add filters/order/limit to each chunk. */
+async function fetchForStations(
+  db: SupabaseClient,
+  table: string,
+  columns: string,
+  stationIds: string[],
+  shape?: (q: any) => any,
+): Promise<Row[]> {
+  const all: Row[] = [];
+  for (let i = 0; i < stationIds.length; i += ID_CHUNK) {
+    const ids = stationIds.slice(i, i + ID_CHUNK);
+    for (let from = 0; ; from += PAGE) {
+      let q: any = db.from(table).select(columns).in('station_id', ids);
+      if (shape) q = shape(q);
+      const chunk = await rows(q.order('id', { ascending: true }).range(from, from + PAGE - 1));
+      all.push(...chunk);
+      if (chunk.length < PAGE) break;
+    }
   }
   return all;
 }
@@ -69,7 +82,7 @@ const shortId = (id: unknown): string => {
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 // ---------- main ----------
-export async function buildSnapshot(): Promise<Snapshot> {
+export async function buildSnapshot(companyId: string): Promise<Snapshot> {
   const db = getSupabase();
   const warnings: string[] = [];
 
@@ -78,45 +91,44 @@ export async function buildSnapshot(): Promise<Snapshot> {
   const yesterdayStart = todayStart - DAY_MS;
 
   // Stations are essential: if this fails the whole request fails with a clear message.
-  const stationsRaw = await fetchAll(db, 'stations', '*');
+  // Only THIS company's stations are read; every other table is limited to those station ids.
+  const stationsRaw: Row[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const chunk = await rows(
+      db.from('stations').select('*').eq('company_id', companyId).order('id', { ascending: true }).range(from, from + PAGE - 1),
+    );
+    stationsRaw.push(...chunk);
+    if (chunk.length < PAGE) break;
+  }
+  const stationIds = stationsRaw.map((s) => String(s.id));
+
+  const newestFirst = (a: Row, b: Row): number => String(b.created_at ?? '').localeCompare(String(a.created_at ?? ''));
 
   const [pumpsRaw, priceRows, waybillRows, openShifts, recentShifts, reorderRows, dipRows, deposits] = await Promise.all([
-    safe(() => fetchAll(db, 'pumps', '*'), 'pumps', warnings, [] as Row[]),
-    safe(() => fetchAll(db, 'fuel_prices', 'station_id,fuel_grade,price'), 'fuel_prices (run the SQL to create it)', warnings, [] as Row[]),
-    safe(() => fetchAll(db, 'waybills', '*'), 'waybills', warnings, [] as Row[]),
-    safe(() => rows(db.from('shifts').select('*').eq('status', 'OPEN')), 'shifts (open)', warnings, [] as Row[]),
+    safe(() => fetchForStations(db, 'pumps', '*', stationIds), 'pumps', warnings, [] as Row[]),
+    safe(() => fetchForStations(db, 'fuel_prices', 'id,station_id,fuel_grade,price', stationIds), 'fuel_prices (run the SQL to create it)', warnings, [] as Row[]),
+    safe(() => fetchForStations(db, 'waybills', '*', stationIds), 'waybills', warnings, [] as Row[]),
+    safe(() => fetchForStations(db, 'shifts', '*', stationIds, (q) => q.eq('status', 'OPEN')), 'shifts (open)', warnings, [] as Row[]),
     safe(
       // one extra day back so a shift opened the day before yesterday but closed today is still counted
-      () => rows(db.from('shifts').select('*').gte('created_at', new Date(yesterdayStart - DAY_MS).toISOString())),
+      () => fetchForStations(db, 'shifts', '*', stationIds, (q) => q.gte('created_at', new Date(yesterdayStart - DAY_MS).toISOString())),
       'shifts (recent)',
       warnings,
       [] as Row[],
     ),
     safe(
-      async () => {
-        try {
-          return await rows(db.from('reorder_requests').select('*').order('created_at', { ascending: false }).limit(100));
-        } catch {
-          return await rows(db.from('reorder_requests').select('*').limit(100));
-        }
-      },
+      async () => (await fetchForStations(db, 'reorder_requests', '*', stationIds)).sort(newestFirst).slice(0, 100),
       'reorder_requests',
       warnings,
       [] as Row[],
     ),
     safe(
-      async () => {
-        try {
-          return await rows(db.from('dipstick_delivery').select('*').order('created_at', { ascending: false }).limit(500));
-        } catch {
-          return await rows(db.from('dipstick_delivery').select('*').limit(500));
-        }
-      },
+      async () => (await fetchForStations(db, 'dipstick_delivery', '*', stationIds)).sort(newestFirst).slice(0, 500),
       'dipstick_delivery',
       warnings,
       [] as Row[],
     ),
-    loadDeposits(db, warnings),
+    loadDeposits(db, stationIds, warnings),
   ]);
 
   // ----- index pumps, prices, shifts -----
@@ -401,12 +413,12 @@ export async function buildSnapshot(): Promise<Snapshot> {
   };
 }
 
-async function loadDeposits(db: SupabaseClient, warnings: string[]): Promise<{ rows: Row[]; hasDates: boolean }> {
+async function loadDeposits(db: SupabaseClient, stationIds: string[], warnings: string[]): Promise<{ rows: Row[]; hasDates: boolean }> {
   try {
-    return { rows: await fetchAll(db, 'bank_deposits', 'id,station_id,amount,created_at'), hasDates: true };
+    return { rows: await fetchForStations(db, 'bank_deposits', 'id,station_id,amount,created_at', stationIds), hasDates: true };
   } catch {
     try {
-      const plain = await fetchAll(db, 'bank_deposits', 'id,station_id,amount');
+      const plain = await fetchForStations(db, 'bank_deposits', 'id,station_id,amount', stationIds);
       warnings.push('bank_deposits has no created_at column, so "banked today" is not available.');
       return { rows: plain, hasDates: false };
     } catch (e) {
