@@ -67,6 +67,64 @@ export interface ReorderView {
   imageId: string | null;
 }
 
+export interface TankView {
+  id: string;
+  stationId: string;
+  number: string;
+  grade: string;
+  label: string;
+  capacity: number | null;
+  tolerance: number | null;
+  chartPoints: number;
+}
+
+export type StockCheckStatus = 'ok' | 'flag' | 'needs_baseline' | 'waiting' | 'no_dip' | 'out_of_chart';
+
+export interface StockCheckView {
+  stationId: string;
+  stationName: string;
+  grade: string;
+  label: string;
+  status: StockCheckStatus;
+  message: string;
+  tanks: string[];
+  bookLitres: number;
+  dipLitres: number | null;
+  difference: number | null; // tank litres - book litres, before the baseline
+  baseline: number | null;
+  adjusted: number | null; // difference - baseline (this is what is compared with the tolerance)
+  tolerance: number;
+  dipAt: string | null;
+}
+
+export type IncidentStatus = 'awaiting_redip' | 'awaiting_decision' | 'awaiting_reason' | 'confirmed' | 'explained' | 'closed';
+/** waiting = the manager is being asked; unconfirmed = no answer for 12 hours; confirmed = the manager says it is a real problem */
+export type IncidentStage = 'waiting' | 'unconfirmed' | 'confirmed' | 'explained' | 'closed';
+
+export interface IncidentView {
+  id: string;
+  stationId: string;
+  stationName: string;
+  grade: string;
+  label: string;
+  status: IncidentStatus;
+  stage: IncidentStage;
+  gap: number | null; // tank minus books when it was opened
+  tankLitres: number | null;
+  bookLitres: number | null;
+  redipTankLitres: number | null; // the same numbers after the manager's fresh dip
+  redipBookLitres: number | null;
+  redipGap: number | null;
+  managerReason: string | null;
+  managerNote: string | null;
+  ownerNote: string | null;
+  openedBy: string | null;
+  openedAt: string | null;
+  updatedAt: string | null;
+  confirmedAt: string | null;
+  resolvedAt: string | null;
+}
+
 export interface Snapshot {
   generatedAt: string;
   stations: StationView[];
@@ -77,6 +135,9 @@ export interface Snapshot {
   fuels: FuelOption[]; // every fuel known anywhere (pumps, prices, deliveries)
   stationFuels: Record<string, string[]>; // stationId -> grades that station sells / has a price or delivery for
   reorders: ReorderView[];
+  tanks: Record<string, TankView[]>; // stationId -> tanks
+  stockChecks: StockCheckView[];
+  incidents: IncidentView[];
   momoConnected: boolean;
   warnings: string[];
 }
