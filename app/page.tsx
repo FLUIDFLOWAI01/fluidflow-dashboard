@@ -33,8 +33,16 @@ function formatDate(value: string): string {
 
 type Msg = { kind: 'ok' | 'err'; text: string };
 
+// The platform admin opens a company with /?company=<id>. Company logins never need this: the server knows their company.
+function adminCompanyId(): string | null {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search).get('company');
+}
+
 async function postJson(url: string, method: string, body: unknown): Promise<{ ok: boolean; status: number; data: any }> {
-  const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const company = adminCompanyId();
+  const payload = company && body && typeof body === 'object' ? { ...(body as object), company_id: company } : body;
+  const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   if (res.status === 401) {
     window.location.href = '/login';
   }
@@ -56,7 +64,12 @@ function useSnapshot() {
     inFlight.current = true;
     setRefreshing(true);
     try {
-      const res = await fetch('/api/dashboard', { cache: 'no-store' });
+      const company = adminCompanyId();
+      const res = await fetch(company ? `/api/dashboard?company=${encodeURIComponent(company)}` : '/api/dashboard', { cache: 'no-store' });
+      if (res.status === 400 && !company) {
+        window.location.href = '/admin'; // platform admin without a chosen company
+        return;
+      }
       if (res.status === 401) {
         window.location.href = '/login';
         return;
@@ -380,6 +393,16 @@ const OTHER_FUEL = '__other__';
 export default function ExecutiveDashboard() {
   const { snapshot, error, refreshing, reload } = useSnapshot();
 
+  const [me, setMe] = useState<{ role: string; companyName: string | null } | null>(null);
+  useEffect(() => {
+    fetch('/api/session', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => {
+        if (s) setMe({ role: String(s.role), companyName: s.companyName ?? null });
+      })
+      .catch(() => undefined);
+  }, []);
+
   const [selectedStationRaw, setSelectedStation] = useState('all');
   const [activeTab, setActiveTab] = useState<'overview' | 'pricing' | 'onboarding'>('overview');
 
@@ -646,7 +669,10 @@ export default function ExecutiveDashboard() {
           </div>
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-white">FluidFlow AI <span className="text-emerald-400 text-sm font-normal">Executive Center</span></h1>
-            <p className="text-slate-400 text-xs">Real-time multi-station audit, wetstock tracking, and pricing engine</p>
+            <p className="text-slate-400 text-xs">
+              {me?.companyName ? `${me.companyName} · ` : ''}Real-time multi-station audit, wetstock tracking, and pricing engine
+              {me?.role === 'viewer' ? ' · read-only login' : ''}
+            </p>
           </div>
         </div>
 
@@ -677,6 +703,9 @@ export default function ExecutiveDashboard() {
             <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
           </button>
 
+          {me?.role === 'platform_admin' && (
+            <a href="/admin" className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg">All companies</a>
+          )}
           <button onClick={logout} className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg">
             <LogOut className="w-3.5 h-3.5" /> Sign out
           </button>
