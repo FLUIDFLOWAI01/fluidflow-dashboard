@@ -4,23 +4,25 @@ import React, { useState } from 'react';
 import { Fuel } from 'lucide-react';
 
 export default function LoginPage() {
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (busy || !password) return;
+    if (busy || !password || !email.trim()) return;
     setBusy(true);
     setError(null);
     try {
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ email, password }),
       });
       if (res.ok) {
-        window.location.href = '/';
+        const info = await res.json().catch(() => null);
+        window.location.href = info?.role === 'platform_admin' ? '/admin' : '/';
         return;
       }
       const body = await res.json().catch(() => null);
@@ -45,11 +47,22 @@ export default function LoginPage() {
           </div>
         </div>
         <div>
+          <label htmlFor="email" className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">Email</label>
+          <input
+            id="email"
+            type="email"
+            autoFocus
+            autoComplete="username"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-emerald-400"
+          />
+        </div>
+        <div>
           <label htmlFor="password" className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">Password</label>
           <input
             id="password"
             type="password"
-            autoFocus
             autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -59,7 +72,7 @@ export default function LoginPage() {
         {error && <p className="text-rose-400 text-sm" role="alert">{error}</p>}
         <button
           type="submit"
-          disabled={busy || !password}
+          disabled={busy || !password || !email.trim()}
           className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 font-bold py-3 rounded-xl transition-colors"
         >
           {busy ? 'Signing in…' : 'Sign in'}
