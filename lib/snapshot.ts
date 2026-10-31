@@ -8,14 +8,19 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabase } from './supabase';
 import { gradeLabel, normGrade, nozzleFuel, pumpDisplayCount, pumpGrades, toNumber } from './fuel';
 import type { Row } from './fuel';
+import { evaluateStock } from './tanks';
+import type { ChartPoint } from './tanks';
 import type {
+  IncidentView,
   BankingState,
   DipView,
   InventoryView,
   ReorderView,
   Snapshot,
   StationView,
+  StockCheckView,
   StockLevel,
+  TankView,
   WaybillView,
 } from './types';
 
@@ -58,6 +63,15 @@ async function fetchForStations(
     }
   }
   return all;
+}
+
+/** Reads an optional table: if it has not been created yet (setup SQL not run) this just returns nothing. */
+async function quietly(fn: () => Promise<Row[]>): Promise<Row[]> {
+  try {
+    return await fn();
+  } catch {
+    return [];
+  }
 }
 
 async function safe<T>(fn: () => Promise<T>, label: string, warnings: string[], fallback: T): Promise<T> {
@@ -104,7 +118,7 @@ export async function buildSnapshot(companyId: string): Promise<Snapshot> {
 
   const newestFirst = (a: Row, b: Row): number => String(b.created_at ?? '').localeCompare(String(a.created_at ?? ''));
 
-  const [pumpsRaw, priceRows, waybillRows, openShifts, recentShifts, reorderRows, dipRows, deposits] = await Promise.all([
+  const [pumpsRaw, priceRows, waybillRows, openShifts, recentShifts, reorderRows, dipRows, deposits, tankRows, baselineRows, incidentRows] = await Promise.all([
     safe(() => fetchForStations(db, 'pumps', '*', stationIds), 'pumps', warnings, [] as Row[]),
     safe(() => fetchForStations(db, 'fuel_prices', 'id,station_id,fuel_grade,price', stationIds), 'fuel_prices (run the SQL to create it)', warnings, [] as Row[]),
     safe(() => fetchForStations(db, 'waybills', '*', stationIds), 'waybills', warnings, [] as Row[]),
@@ -123,12 +137,15 @@ export async function buildSnapshot(companyId: string): Promise<Snapshot> {
       [] as Row[],
     ),
     safe(
-      async () => (await fetchForStations(db, 'dipstick_delivery', '*', stationIds)).sort(newestFirst).slice(0, 500),
+      async () => (await fetchForStations(db, 'dipstick_delivery', '*', stationIds)).sort(newestFirst).slice(0, 3000),
       'dipstick_delivery',
       warnings,
       [] as Row[],
     ),
     loadDeposits(db, stationIds, warnings),
+    quietly(() => fetchForStations(db, 'tanks', '*', stationIds)),
+    quietly(() => fetchForStations(db, 'stock_baselines', '*', stationIds)),
+    quietly(() => fetchForStations(db, 'incidents', '*', stationIds)),
   ]);
 
   // ----- index pumps, prices, shifts -----
@@ -341,6 +358,7 @@ export async function buildSnapshot(companyId: string): Promise<Snapshot> {
   // ----- latest dipstick reading per tank -----
   const dips: Record<string, DipView[]> = {};
   const seenTanks = new Set<string>();
+  const latestDip = new Map<string, { reading: number; at: number }>();
   for (const d of dipRows) {
     const stationId = String(d.station_id);
     const tank = String(d.tank_id ?? '?');
@@ -349,9 +367,160 @@ export async function buildSnapshot(companyId: string): Promise<Snapshot> {
     seenTanks.add(key);
     const reading = toNumber(d.dip_reading);
     if (reading === null) continue;
+    const dipTime = Date.parse(String(d.created_at ?? ''));
+    latestDip.set(key, { reading, at: Number.isFinite(dipTime) ? dipTime : 0 });
     (dips[stationId] ??= []).push({ tank, reading, at: d.created_at ? String(d.created_at) : null });
   }
   for (const list of Object.values(dips)) list.sort((a, b) => a.tank.localeCompare(b.tank, undefined, { numeric: true }));
+
+  // ----- tanks and the dipstick-vs-book-stock check -----
+  const tanks: Record<string, TankView[]> = {};
+  const chartByTank = new Map<string, ChartPoint[]>();
+  for (const t of tankRows) {
+    const stationId = String(t.station_id);
+    const grade = normGrade(t.fuel_grade);
+    const points: ChartPoint[] = Array.isArray(t.chart)
+      ? (t.chart as any[])
+          .map((p) => ({ dip: Number(p?.dip), litres: Number(p?.litres) }))
+          .filter((p) => Number.isFinite(p.dip) && Number.isFinite(p.litres))
+      : [];
+    chartByTank.set(`${stationId}|${String(t.tank_number)}`, points);
+    (tanks[stationId] ??= []).push({
+      id: String(t.id),
+      stationId,
+      number: String(t.tank_number),
+      grade,
+      label: gradeLabel(grade),
+      capacity: toNumber(t.capacity_litres),
+      tolerance: toNumber(t.tolerance_litres),
+      chartPoints: points.length,
+    });
+  }
+  for (const list of Object.values(tanks)) list.sort((a, b) => a.number.localeCompare(b.number, undefined, { numeric: true }));
+
+  const baselines = new Map<string, number>();
+  for (const b of baselineRows) {
+    const off = toNumber(b.offset_litres);
+    if (off !== null) baselines.set(`${String(b.station_id)}|${normGrade(b.fuel_grade)}`, off);
+  }
+
+  const lastCloseByStation = new Map<string, number>();
+  for (const shift of Array.from(allShifts.values())) {
+    if (String(shift.status ?? '').toUpperCase() !== 'CLOSED') continue;
+    const at = Date.parse(String(shift.closed_at ?? ''));
+    if (!Number.isFinite(at)) continue;
+    const key = String(shift.station_id);
+    lastCloseByStation.set(key, Math.max(lastCloseByStation.get(key) ?? 0, at));
+  }
+
+  const stockChecks: StockCheckView[] = [];
+  const checkFlags = new Map<string, string[]>();
+  for (const station of stationsRaw) {
+    const stationId = String(station.id);
+    const byGrade = new Map<string, TankView[]>();
+    for (const t of tanks[stationId] ?? []) byGrade.set(t.grade, [...(byGrade.get(t.grade) ?? []), t]);
+
+    for (const [grade, gradeTanks] of Array.from(byGrade.entries())) {
+      if (grade === 'unknown' || !grade) continue;
+      const deliveredAt = (waybillsByStationRaw.get(stationId) ?? [])
+        .filter((w) => normGrade(w.fuel_type) === grade)
+        .reduce((latest, w) => {
+          const at = Date.parse(String(w.created_at ?? ''));
+          return Number.isFinite(at) ? Math.max(latest, at) : latest;
+        }, 0);
+      const book = (inventory[stationId] ?? []).find((i) => i.grade === grade)?.bookStock ?? 0;
+      const baseline = baselines.get(`${stationId}|${grade}`) ?? null;
+
+      const result = evaluateStock({
+        tanks: gradeTanks.map((t) => ({
+          number: t.number,
+          points: chartByTank.get(`${stationId}|${t.number}`) ?? [],
+          capacity: t.capacity,
+          tolerance: t.tolerance,
+          dip: latestDip.get(`${stationId}|${t.number}`) ?? null,
+        })),
+        bookLitres: book,
+        baseline,
+        openShift: openShiftByStation.has(stationId),
+        lastCloseAt: lastCloseByStation.get(stationId) ?? 0,
+        lastDeliveryAt: deliveredAt,
+      });
+
+      stockChecks.push({
+        stationId,
+        stationName: String(station.name ?? 'Unnamed station'),
+        grade,
+        label: gradeLabel(grade),
+        status: result.status,
+        message: result.message,
+        tanks: gradeTanks.map((t) => t.number),
+        bookLitres: round2(result.bookLitres),
+        dipLitres: result.dipLitres === null ? null : round2(result.dipLitres),
+        difference: result.rawDifference,
+        baseline,
+        adjusted: result.adjustedDifference,
+        tolerance: round2(result.tolerance),
+        dipAt: result.dipAt && Number.isFinite(result.dipAt) ? new Date(result.dipAt).toISOString() : null,
+      });
+      if (result.status === 'flag') {
+        checkFlags.set(stationId, [...(checkFlags.get(stationId) ?? []), `${gradeLabel(grade)} stock check: ${result.message}`]);
+      }
+    }
+  }
+  stockChecks.sort((a, b) => a.stationName.localeCompare(b.stationName) || a.label.localeCompare(b.label));
+
+  // ----- stock incidents (a flagged gap the station manager has been asked to verify) -----
+  const UNCONFIRMED_AFTER_MS = 12 * 3_600_000;
+  const stationNameById = new Map<string, string>(stationsRaw.map((s) => [String(s.id), String(s.name ?? 'Unnamed station')]));
+  const num = (v: unknown): number | null => toNumber(v);
+  const text = (v: unknown): string | null => (v === null || v === undefined || v === '' ? null : String(v));
+  const incidents: IncidentView[] = incidentRows
+    .map((r): IncidentView => {
+      const status = (['awaiting_redip', 'awaiting_decision', 'awaiting_reason', 'confirmed', 'explained', 'closed'].includes(String(r.status))
+        ? String(r.status)
+        : 'awaiting_redip') as IncidentView['status'];
+      const openedAt = Date.parse(String(r.opened_at ?? ''));
+      const waiting = status === 'awaiting_redip' || status === 'awaiting_decision' || status === 'awaiting_reason';
+      const stage: IncidentView['stage'] = waiting
+        ? Number.isFinite(openedAt) && nowDate.getTime() - openedAt > UNCONFIRMED_AFTER_MS ? 'unconfirmed' : 'waiting'
+        : status === 'confirmed' && r.resolved_at ? 'closed' : status;
+      const grade = normGrade(r.fuel_grade);
+      return {
+        id: String(r.id),
+        stationId: String(r.station_id),
+        stationName: stationNameById.get(String(r.station_id)) ?? 'Unknown station',
+        grade,
+        label: gradeLabel(grade),
+        status,
+        stage,
+        gap: num(r.gap_litres),
+        tankLitres: num(r.tank_litres),
+        bookLitres: num(r.book_litres),
+        redipTankLitres: num(r.redip_tank_litres),
+        redipBookLitres: num(r.redip_book_litres),
+        redipGap: num(r.redip_gap_litres),
+        managerReason: text(r.manager_reason),
+        managerNote: text(r.manager_note),
+        ownerNote: text(r.owner_note),
+        openedBy: text(r.opened_by),
+        openedAt: text(r.opened_at),
+        updatedAt: text(r.updated_at),
+        confirmedAt: text(r.confirmed_at),
+        resolvedAt: text(r.resolved_at),
+      };
+    })
+    // open ones always; finished ones for 30 days
+    .filter((i) => i.stage === 'waiting' || i.stage === 'unconfirmed' || (i.stage === 'confirmed') ||
+      nowDate.getTime() - Date.parse(String(i.resolvedAt ?? i.updatedAt ?? i.openedAt ?? '')) < 30 * DAY_MS)
+    .sort((a, b) => String(b.openedAt ?? '').localeCompare(String(a.openedAt ?? '')));
+  const incidentFlags = new Map<string, string[]>();
+  for (const i of incidents) {
+    let line: string | null = null;
+    if (i.stage === 'confirmed') line = `${i.label}: stock gap CONFIRMED by the station manager as a real problem`;
+    else if (i.stage === 'unconfirmed') line = `${i.label}: stock gap NOT confirmed. The manager has not answered for 12 hours`;
+    else if (i.stage === 'waiting') line = `${i.label}: waiting for the manager to verify a stock gap`;
+    if (line) incidentFlags.set(i.stationId, [...(incidentFlags.get(i.stationId) ?? []), line]);
+  }
 
   // ----- station cards -----
   const stations: StationView[] = stationsRaw
@@ -372,6 +541,8 @@ export async function buildSnapshot(companyId: string): Promise<Snapshot> {
         if (inv.level === 'empty') attention.push(`${inv.label}: no stock left on recorded deliveries`);
         else if (inv.level === 'critical') attention.push(`${inv.label} at or below deadstock`);
       }
+      attention.push(...(checkFlags.get(id) ?? []));
+      attention.push(...(incidentFlags.get(id) ?? []));
       for (const g of pumpFuelsByStation[id] ?? []) {
         if (priceFor(id, g) === null) attention.push(`No selling price set for ${gradeLabel(g)}`);
       }
@@ -408,6 +579,9 @@ export async function buildSnapshot(companyId: string): Promise<Snapshot> {
     fuels: allGrades.map((grade) => ({ grade, label: gradeLabel(grade) })),
     stationFuels,
     reorders,
+    tanks,
+    stockChecks,
+    incidents,
     momoConnected: false,
     warnings,
   };
