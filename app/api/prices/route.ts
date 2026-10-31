@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { callBackend } from '../../../lib/backend';
+import { errorResponse, getScope } from '../../../lib/scope';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -28,11 +29,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Select at least one station' }, { status: 400 });
   }
 
-  const result = await callBackend('/api/prices/update', {
-    fuel_grade: fuelGrade,
-    new_price: Math.round(price * 100) / 100,
-    target_scope: scope,
-    target_stations: scope === 'specific' ? targets : [],
-  });
-  return NextResponse.json(result.data, { status: result.status });
+  try {
+    const companyScope = await getScope(req, { requestedCompany: body?.company_id, write: true });
+    const result = await callBackend('/api/prices/update', {
+      company_id: companyScope.companyId,
+      fuel_grade: fuelGrade,
+      new_price: Math.round(price * 100) / 100,
+      target_scope: scope,
+      target_stations: scope === 'specific' ? targets : [],
+    });
+    return NextResponse.json(result.data, { status: result.status });
+  } catch (e) {
+    return errorResponse(e);
+  }
 }
