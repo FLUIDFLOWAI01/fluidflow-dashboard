@@ -6,20 +6,77 @@ import { getSupabase } from '../../../lib/supabase';
 
 export const dynamic = 'force-dynamic';
 
-// Best-effort brake on password guessing (per server instance). The delay on a wrong password also slows guessing.
+// ---------------------------------------------------------------------------
+// Brake on password guessing. Kept in memory per server instance (best effort).
+// Three counters: same IP + same email, whole IP, and whole email (stops attackers
+// who rotate IPs against one account).
+// ---------------------------------------------------------------------------
 const failures = new Map<string, number[]>();
-const MAX_FAILURES = 8;
 const WINDOW_MS = 10 * 60 * 1000;
+const LIMIT_IP_EMAIL = 8;
+const LIMIT_IP = 30;
+const LIMIT_EMAIL = 20;
+const MAX_TRACKED_KEYS = 5000; // stops the map growing forever under attack
+const FAIL_DELAY_MS = 800;
+const MAX_BODY_BYTES = 2048;
+const MAX_EMAIL_LENGTH = 254;
+const MAX_PASSWORD_LENGTH = 200; // stops huge passwords being used to slow the server
+
 const DUMMY_HASH = hashPassword('not-a-real-password');
 
-function clientKey(req: Request, email: string): string {
-  const ip = (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim() || 'unknown';
-  return `${ip}|${email}`;
+function recentCount(key: string, now: number): number {
+  const list = (failures.get(key) ?? []).filter((t) => now - t < WINDOW_MS);
+  if (list.length) failures.set(key, list);
+  else failures.delete(key);
+  return list.length;
 }
+
+function recordFailure(key: string): void {
+  if (failures.size >= MAX_TRACKED_KEYS && !failures.has(key)) {
+    const oldest = failures.keys().next().value;
+    if (oldest !== undefined) failures.delete(oldest);
+  }
+  failures.set(key, [...(failures.get(key) ?? []), Date.now()]);
+}
+
+function clientIp(req: Request): string {
+  const real = (req.headers.get('x-real-ip') ?? '').trim();
+  if (real) return real;
+  return (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim() || 'unknown';
+}
+
+function genericError(status = 500) {
+  return NextResponse.json({ error: 'Sign in failed' }, { status });
+}
+
+type DashboardUser = {
+  id: string | number;
+  company_id: string | number;
+  password_hash: string | null;
+  role: string | null;
+  active: boolean | null;
+};
 
 export async function POST(req: Request) {
   if (!process.env.SESSION_SECRET) {
-    return NextResponse.json({ error: 'Server is missing SESSION_SECRET' }, { status: 500 });
+    console.error('Login: SESSION_SECRET is not set');
+    return genericError();
+  }
+
+  // Only accept requests that come from our own site (extra protection on top of SameSite=strict).
+  const origin = req.headers.get('origin');
+  const host = req.headers.get('host');
+  if (origin && host) {
+    try {
+      if (new URL(origin).host !== host) return NextResponse.json({ error: 'Invalid request' }, { status: 403 });
+    } catch {
+      return NextResponse.json({ error: 'Invalid request' }, { status: 403 });
+    }
+  }
+
+  const declaredLength = Number(req.headers.get('content-length') ?? 0);
+  if (declaredLength > MAX_BODY_BYTES) {
+    return NextResponse.json({ error: 'Invalid request' }, { status: 413 });
   }
 
   let email = '';
@@ -32,18 +89,29 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
   if (!email || !password) return NextResponse.json({ error: 'Enter your email and password' }, { status: 400 });
+  if (email.length > MAX_EMAIL_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
+    return NextResponse.json({ error: 'Wrong email or password' }, { status: 401 });
+  }
 
-  const key = clientKey(req, email);
+  // Check the limits BEFORE doing any database or hashing work.
+  const ip = clientIp(req);
+  const keyIpEmail = `ip-email|${ip}|${email}`;
+  const keyIp = `ip|${ip}`;
+  const keyEmail = `email|${email}`;
   const now = Date.now();
-  const recent = (failures.get(key) ?? []).filter((t) => now - t < WINDOW_MS);
-  failures.set(key, recent);
-  if (recent.length >= MAX_FAILURES) {
+  if (
+    recentCount(keyIpEmail, now) >= LIMIT_IP_EMAIL ||
+    recentCount(keyIp, now) >= LIMIT_IP ||
+    recentCount(keyEmail, now) >= LIMIT_EMAIL
+  ) {
     return NextResponse.json({ error: 'Too many wrong attempts. Try again in 10 minutes.' }, { status: 429 });
   }
 
   const fail = async () => {
-    failures.set(key, [...(failures.get(key) ?? []), Date.now()]);
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    recordFailure(keyIpEmail);
+    recordFailure(keyIp);
+    recordFailure(keyEmail);
+    await new Promise((resolve) => setTimeout(resolve, FAIL_DELAY_MS));
     return NextResponse.json({ error: 'Wrong email or password' }, { status: 401 });
   };
 
@@ -57,31 +125,55 @@ export async function POST(req: Request) {
     session = { uid: 'platform-admin', cid: null, role: 'platform_admin' };
   } else {
     // 2) A company login from the database.
-    let user: any = null;
+    let user: DashboardUser | null = null;
     try {
       const { data, error } = await getSupabase()
         .from('dashboard_users')
         .select('id,company_id,password_hash,role,active')
-        .ilike('email', email.replace(/[%_]/g, (c: string) => `\\${c}`))
+        .ilike('email', email.replace(/[\\%_]/g, (c: string) => `\\${c}`))
         .maybeSingle();
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-      user = data;
+      if (error) {
+        console.error('Login: user lookup failed', error);
+        return genericError();
+      }
+      user = (data as DashboardUser | null) ?? null;
     } catch (e) {
-      return NextResponse.json({ error: e instanceof Error ? e.message : 'Sign in failed' }, { status: 500 });
+      console.error('Login: user lookup crashed', e);
+      return genericError();
     }
-    const ok = verifyPassword(password, user?.password_hash ?? DUMMY_HASH) && Boolean(user);
-    if (!ok || !user.active) return fail();
 
-    const { data: company } = await getSupabase().from('companies').select('status').eq('id', user.company_id).maybeSingle();
-    if (!company || company.status !== 'active') {
-      return NextResponse.json({ error: 'This company is suspended. Contact support.' }, { status: 403 });
+    // Always run the password check (against a dummy hash if the user is unknown) so timing does not reveal which emails exist.
+    const passwordOk = verifyPassword(password, user?.password_hash || DUMMY_HASH);
+    if (!user || !passwordOk || !user.active) return fail();
+
+    try {
+      const { data: company, error: companyError } = await getSupabase()
+        .from('companies')
+        .select('status')
+        .eq('id', user.company_id)
+        .maybeSingle();
+      if (companyError) {
+        console.error('Login: company lookup failed', companyError);
+        return genericError();
+      }
+      if (!company || company.status !== 'active') {
+        return NextResponse.json({ error: 'This company is suspended. Contact support.' }, { status: 403 });
+      }
+    } catch (e) {
+      console.error('Login: company lookup crashed', e);
+      return genericError();
     }
     session = { uid: String(user.id), cid: String(user.company_id), role: user.role === 'viewer' ? 'viewer' : 'owner' };
   }
 
-  failures.delete(key);
+  // Successful login: clear the counters for this IP + email only.
+  failures.delete(keyIpEmail);
+
   const token = await createSessionToken(session);
-  if (!token) return NextResponse.json({ error: 'Could not create a session' }, { status: 500 });
+  if (!token) {
+    console.error('Login: could not create session token');
+    return genericError();
+  }
 
   const res = NextResponse.json({ ok: true, role: session.role });
   res.cookies.set(SESSION_COOKIE, token, {
@@ -91,11 +183,13 @@ export async function POST(req: Request) {
     path: '/',
     maxAge: SESSION_MAX_AGE_SECONDS,
   });
+  res.headers.set('Cache-Control', 'no-store');
   return res;
 }
 
 export async function DELETE() {
   const res = NextResponse.json({ ok: true });
-  res.cookies.set(SESSION_COOKIE, '', { httpOnly: true, sameSite: 'strict', path: '/', maxAge: 0 });
+  res.cookies.set(SESSION_COOKIE, '', { httpOnly: true, sameSite: 'strict', secure: process.env.NODE_ENV === 'production', path: '/', maxAge: 0 });
+  res.headers.set('Cache-Control', 'no-store');
   return res;
 }
