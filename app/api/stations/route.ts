@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { callBackend } from '../../../lib/backend';
+import { errorResponse, getScope } from '../../../lib/scope';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -49,12 +50,18 @@ export async function POST(req: Request) {
     cleaned.push({ id, displays: items, backMeter: d?.backMeter !== false });
   }
 
-  const result = await callBackend('/api/stations/provision', {
-    station_name: text(body.station_name),
-    station_number: text(body.station_number),
-    manager_phone: text(body.manager_phone),
-    base_deadstock: deadstock,
-    dispensers: cleaned,
-  });
-  return NextResponse.json(result.data, { status: result.status });
+  try {
+    const scope = await getScope(req, { requestedCompany: body?.company_id, write: true });
+    const result = await callBackend('/api/stations/provision', {
+      company_id: scope.companyId,
+      station_name: text(body.station_name),
+      station_number: text(body.station_number),
+      manager_phone: text(body.manager_phone),
+      base_deadstock: deadstock,
+      dispensers: cleaned,
+    });
+    return NextResponse.json(result.data, { status: result.status });
+  } catch (e) {
+    return errorResponse(e);
+  }
 }
